@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#050508">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Void Mediator">
+  <title>Void Mediator — Phase-Law Architecture</title>
+  
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="data:application/json,{
+    &quot;name&quot;: &quot;Void Mediator&quot;,
+    &quot;short_name&quot;: &quot;VoidMed&quot;,
+    &quot;description&quot;: &quot;Bridging information and physics&quot;,
+    &quot;start_url&quot;: &quot;.&quot;,
+    &quot;display&quot;: &quot;standalone&quot;,
+    &quot;background_color&quot;: &quot;#050508&quot;,
+    &quot;theme_color&quot;: &quot;#050508&quot;
+  }">
+  
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { 
+      height: 100%; 
+      background: #050508; 
+      overflow-x: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body { 
+      font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace; 
+      -webkit-font-smoothing: antialiased;
+    }
+    /* Hide scrollbar but allow scrolling */
+    ::-webkit-scrollbar { width: 0; height: 0; }
+  </style>
+  
+  <!-- React & Babel -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    /* ═══════════════════════════════════════════════════════════
+       Void Mediator v0.1
+       Bridging the Discontinuity Between Information and Physics
+       Phase Gear Engine — Phase-Law Architecture / pTCP
+       ═══════════════════════════════════════════════════════════ */
+
+    // ── Constants ──
+    const TAU = Math.PI * 2;
+    const VOID_BLACK = "#050508";
+    const FIELD_GREEN = "#1a3a2a";
+    const GLOW_CYAN = "#4af0d0";
+    const GLOW_DIM = "#1a6a5a";
+    const PULSE_GOLD = "#d4a843";
+    const WARN_RED = "#c44a3a";
+
+    // ── Utility ──
+    const lerp = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+    // ── Sensor Hook ──
+    function useSensors() {
+      const [data, setData] = useState({
+        accel: { x: 0, y: 0, z: 9.8 },
+        gyro: { alpha: 0, beta: 0, gamma: 0 },
+        light: 50,
+        geo: null,
+        audioLevel: 0,
+        timestamp: Date.now(),
+        available: { motion: false, orientation: false, geo: false, audio: false },
+      });
+
+      const audioCtxRef = useRef(null);
+      const analyserRef = useRef(null);
+      const audioDataRef = useRef(new Uint8Array(64));
+
+      useEffect(() => {
+        let mounted = true;
+
+        const handleMotion = (e) => {
+          if (!mounted) return;
+          const a = e.accelerationIncludingGravity || {};
+          setData((d) => ({
+            ...d,
+            accel: { x: a.x || 0, y: a.y || 0, z: a.z || 9.8 },
+            timestamp: Date.now(),
+            available: { ...d.available, motion: true },
+          }));
+        };
+
+        const handleOrientation = (e) => {
+          if (!mounted) return;
+          setData((d) => ({
+            ...d,
+            gyro: { alpha: e.alpha || 0, beta: e.beta || 0, gamma: e.gamma || 0 },
+            available: { ...d.available, orientation: true },
+          }));
+        };
+
+        const initAudio = async () => {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const src = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 128;
+            src.connect(analyser);
+            audioCtxRef.current = ctx;
+            analyserRef.current = analyser;
+          } catch (e) { /* mic not available */ }
+        };
+
+        let geoWatch = null;
+        if ("geolocation" in navigator) {
+          geoWatch = navigator.geolocation.watchPosition(
+            (pos) => {
+              if (!mounted) return;
+              setData((d) => ({
+                ...d,
+                geo: { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy },
+                available: { ...d.available, geo: true },
+              }));
+            },
+            () => {},
+            { enableHighAccuracy: false }
+          );
+        }
+
+        window.addEventListener("devicemotion", handleMotion);
+        window.addEventListener("deviceorientation", handleOrientation);
+        initAudio();
+
+        const audioInterval = setInterval(() => {
+          if (analyserRef.current && mounted) {
+            analyserRef.current.getByteFrequencyData(audioDataRef.current);
+            const avg = audioDataRef.current.reduce((s, v) => s + v, 0) / audioDataRef.current.length;
+            setData((d) => ({ ...d, audioLevel: avg / 255, available: { ...d.available, audio: true } }));
+          }
+        }, 100);
+
+        const lightInterval = setInterval(() => {
+          if (mounted) {
+            setData((d) => ({
+              ...d,
+              light: 30 + Math.sin(Date.now() / 8000) * 20 + Math.random() * 5,
+            }));
+          }
+        }, 500);
+
+        return () => {
+          mounted = false;
+          window.removeEventListener("devicemotion", handleMotion);
+          window.removeEventListener("deviceorientation", handleOrientation);
+          clearInterval(audioInterval);
+          clearInterval(lightInterval);
+          if (geoWatch) navigator.geolocation.clearWatch(geoWatch);
+          if (audioCtxRef.current) audioCtxRef.current.close();
+        };
+      }, []);
+
+      return data;
+    }
+
+    // ── Phase Gear Engine ──
+    function usePhaseGear(sensors) {
+      const [state, setState] = useState({
+        mu: 0.15,
+        fieldDensity: 0,
+        motionEnergy: 0,
+        environmentalComplexity: 0,
+        constraintTension: 0,
+        phaseGearRatio: 1,
+        fieldVector: { dx: 0, dy: 0, magnitude: 0 },
+        history: [],
+      });
+
+      const prevRef = useRef({ accel: { x: 0, y: 0, z: 9.8 }, mu: 0.15 });
+
+      useEffect(() => {
+        const interval = setInterval(() => {
+          const { accel, gyro, audioLevel, light } = sensors;
+          const prev = prevRef.current;
+
+          const jerk = Math.sqrt(
+            (accel.x - prev.accel.x) ** 2 +
+            (accel.y - prev.accel.y) ** 2 +
+            (accel.z - prev.accel.z) ** 2
+          );
+          const motionEnergy = clamp(jerk / 5, 0, 1);
+          const envComplexity = clamp(audioLevel * 0.6 + (Math.abs(light - 50) / 50) * 0.4, 0, 1);
+          const fieldDensity = clamp(motionEnergy * 0.4 + envComplexity * 0.6, 0, 1);
+          const orientationMag = Math.sqrt(gyro.beta ** 2 + gyro.gamma ** 2) / 180;
+          const constraintTension = clamp(Math.abs(fieldDensity - orientationMag), 0, 1);
+          const phaseGearRatio = 1 + constraintTension * 4;
+
+          const alpha = 0.08;
+          const beta = 0.04;
+          const mu_env = clamp(0.1 + fieldDensity * 0.6 + envComplexity * 0.3, 0, 1);
+          const gradRho = (fieldDensity - (prev.fieldDensity || 0)) * 10;
+          const dMu = alpha * (mu_env - prev.mu) + beta * gradRho;
+          const mu = clamp(prev.mu + dMu, 0.02, 0.98);
+
+          const dx = gyro.gamma / 90;
+          const dy = gyro.beta / 90;
+          const mag = Math.sqrt(dx * dx + dy * dy);
+
+          const newState = {
+            mu,
+            fieldDensity,
+            motionEnergy,
+            environmentalComplexity: envComplexity,
+            constraintTension,
+            phaseGearRatio,
+            fieldVector: { dx, dy, magnitude: clamp(mag, 0, 1) },
+            history: [],
+          };
+
+          setState((s) => ({
+            ...newState,
+            history: [...s.history.slice(-120), { mu, fieldDensity, t: Date.now() }],
+          }));
+
+          prevRef.current = { accel: { ...accel }, mu, fieldDensity };
+        }, 80);
+
+        return () => clearInterval(interval);
+      }, [sensors]);
+
+      return state;
+    }
+
+    // ── Particle Field Canvas ──
+    function FieldCanvas({ mu, fieldDensity, fieldVector, motionEnergy, constraintTension }) {
+      const canvasRef = useRef(null);
+      const particlesRef = useRef([]);
+      const frameRef = useRef(0);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const W = canvas.width;
+        const H = canvas.height;
+
+        if (particlesRef.current.length === 0) {
+          for (let i = 0; i < 200; i++) {
+            particlesRef.current.push({
+              x: Math.random() * W,
+              y: Math.random() * H,
+              vx: (Math.random() - 0.5) * 0.5,
+              vy: (Math.random() - 0.5) * 0.5,
+              size: 1 + Math.random() * 2,
+              phase: Math.random() * TAU,
+              life: 0.3 + Math.random() * 0.7,
+            });
+          }
+        }
+
+        let raf;
+        const draw = () => {
+          frameRef.current++;
+          const t = frameRef.current * 0.02;
+
+          ctx.fillStyle = VOID_BLACK;
+          ctx.fillRect(0, 0, W, H);
+
+          const grad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * 0.6);
+          grad.addColorStop(0, `rgba(26,58,42,${mu * 0.15})`);
+          grad.addColorStop(0.5, `rgba(10,30,20,${mu * 0.08})`);
+          grad.addColorStop(1, "transparent");
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, W, H);
+
+          const ringCount = 3 + Math.floor(constraintTension * 5);
+          for (let i = 0; i < ringCount; i++) {
+            const phase = t * (0.3 + i * 0.1) + (i * TAU) / ringCount;
+            const radius = 30 + i * 40 + Math.sin(phase) * 15;
+            const cx = W / 2 + fieldVector.dx * 60;
+            const cy = H / 2 + fieldVector.dy * 60;
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, 0, TAU);
+            ctx.strokeStyle = `rgba(74,240,208,${(0.03 + mu * 0.08) * (1 - i / ringCount)})`;
+            ctx.lineWidth = 0.5 + mu * 1.5;
+            ctx.stroke();
+          }
+
+          particlesRef.current.forEach((p) => {
+            const fdx = fieldVector.dx * mu * 0.3;
+            const fdy = fieldVector.dy * mu * 0.3;
+            const nx = Math.sin(p.x * 0.01 + t) * 0.2;
+            const ny = Math.cos(p.y * 0.01 + t * 0.7) * 0.2;
+
+            p.vx = lerp(p.vx, fdx + nx, 0.05);
+            p.vy = lerp(p.vy, fdy + ny, 0.05);
+            p.x += p.vx + motionEnergy * (Math.random() - 0.5) * 2;
+            p.y += p.vy + motionEnergy * (Math.random() - 0.5) * 2;
+
+            if (p.x < 0) p.x += W;
+            if (p.x > W) p.x -= W;
+            if (p.y < 0) p.y += H;
+            if (p.y > H) p.y -= H;
+
+            p.phase += 0.02 + fieldDensity * 0.05;
+            const pulse = 0.3 + Math.sin(p.phase) * 0.3;
+            const alpha = p.life * pulse * (0.2 + mu * 0.6);
+
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * (0.8 + mu * 0.5), 0, TAU);
+            ctx.fillStyle = `rgba(74,240,208,${alpha})`;
+            ctx.fill();
+
+            if (mu > 0.3) {
+              particlesRef.current.forEach((q) => {
+                const dist = Math.hypot(p.x - q.x, p.y - q.y);
+                if (dist < 40 * mu && dist > 5) {
+                  ctx.beginPath();
+                  ctx.moveTo(p.x, p.y);
+                  ctx.lineTo(q.x, q.y);
+                  ctx.strokeStyle = `rgba(74,240,208,${(1 - dist / (40 * mu)) * 0.08 * mu})`;
+                  ctx.lineWidth = 0.3;
+                  ctx.stroke();
+                }
+              });
+            }
+          });
+
+          const voidRadius = 20 + mu * 30;
+          const voidGrad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, voidRadius);
+          voidGrad.addColorStop(0, `rgba(5,5,8,${1 - mu * 0.5})`);
+          voidGrad.addColorStop(0.6, `rgba(26,106,90,${mu * 0.15})`);
+          voidGrad.addColorStop(1, "transparent");
+          ctx.fillStyle = voidGrad;
+          ctx.beginPath();
+          ctx.arc(W / 2, H / 2, voidRadius, 0, TAU);
+          ctx.fill();
+
+          raf = requestAnimationFrame(draw);
+        };
+
+        draw();
+        return () => cancelAnimationFrame(raf);
+      }, [mu, fieldDensity, fieldVector, motionEnergy, constraintTension]);
+
+      return (
+        <canvas
+          ref={canvasRef}
+          width={360}
+          height={360}
+          style={{
+            width: "100%",
+            maxWidth: 360,
+            aspectRatio: "1/1",
+            borderRadius: 12,
+            border: `1px solid rgba(74,240,208,${0.1 + mu * 0.2})`,
+          }}
+        />
+      );
+    }
+
+    // ── μ Gauge ──
+    function MuGauge({ mu, label }) {
+      const percent = mu * 100;
+      const color = mu < 0.3 ? GLOW_DIM : mu < 0.7 ? GLOW_CYAN : PULSE_GOLD;
+      const circumference = TAU * 42;
+      const dashOffset = circumference * (1 - mu);
+
+      return (
+        <div style={{ textAlign: "center", position: "relative" }}>
+          <svg width="110" height="110" viewBox="0 0 110 110">
+            <circle cx="55" cy="55" r="42" fill="none" stroke="rgba(74,240,208,0.08)" strokeWidth="4" />
+            <circle
+              cx="55" cy="55" r="42" fill="none"
+              stroke={color}
+              strokeWidth="4"
+              strokeDasharray={circumference}
+              strokeDashoffset={dashOffset}
+              strokeLinecap="round"
+              transform="rotate(-90 55 55)"
+              style={{ transition: "stroke-dashoffset 0.3s ease, stroke 0.5s ease" }}
+            />
+            <text x="55" y="50" textAnchor="middle" fill={color} fontSize="22" fontFamily="monospace" fontWeight="300">
+              {percent.toFixed(0)}
+            </text>
+            <text x="55" y="66" textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="8" fontFamily="monospace">
+              {label}
+            </text>
+          </svg>
+        </div>
+      );
+    }
+
+    // ── Sparkline ──
+    function Sparkline({ data, width = 200, height = 40, color = GLOW_CYAN }) {
+      if (!data || data.length < 2) return null;
+      const max = Math.max(...data.map((d) => d.mu), 0.01);
+      const min = Math.min(...data.map((d) => d.mu));
+      const range = max - min || 0.01;
+      const points = data
+        .map((d, i) => {
+          const x = (i / (data.length - 1)) * width;
+          const y = height - ((d.mu - min) / range) * (height - 4) - 2;
+          return `${x},${y}`;
+        })
+        .join(" ");
+
+      return (
+        <svg width={width} height={height} style={{ display: "block", opacity: 0.7 }}>
+          <polyline fill="none" stroke={color} strokeWidth="1.2" points={points} />
+          {data.length > 0 && (
+            <circle
+              cx={width}
+              cy={height - ((data[data.length - 1].mu - min) / range) * (height - 4) - 2}
+              r="2.5"
+              fill={color}
+            />
+          )}
+        </svg>
+      );
+    }
+
+    // ── Status Badge ──
+    function StatusBadge({ available }) {
+      const sensors = [
+        { key: "motion", label: "Accel" },
+        { key: "orientation", label: "Orient" },
+        { key: "audio", label: "Audio" },
+        { key: "geo", label: "Geo" },
+      ];
+
+      return (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {sensors.map((s) => (
+            <span
+              key={s.key}
+              style={{
+                fontSize: 9,
+                padding: "2px 6px",
+                borderRadius: 4,
+                background: available[s.key] ? "rgba(74,240,208,0.1)" : "rgba(255,255,255,0.03)",
+                color: available[s.key] ? GLOW_CYAN : "rgba(255,255,255,0.15)",
+                border: `1px solid ${available[s.key] ? "rgba(74,240,208,0.2)" : "rgba(255,255,255,0.05)"}`,
+                fontFamily: "monospace",
+              }}
+            >
+              {available[s.key] ? "●" : "○"} {s.label}
+            </span>
+          ))}
+        </div>
+      );
+    }
+
+    // ── Field State Label ──
+    function FieldStateLabel({ mu }) {
+      let label, desc;
+      if (mu < 0.15) {
+        label = "VOID";
+        desc = "Pure physical state — no connection to information";
+      } else if (mu < 0.35) {
+        label = "LATENT";
+        desc = "Latent mediation — field emergence";
+      } else if (mu < 0.55) {
+        label = "MEDIATING";
+        desc = "Mediation in progress — bidirectional constraint propagation";
+      } else if (mu < 0.75) {
+        label = "COHERENT";
+        desc = "Field order established — guidance without command";
+      } else {
+        label = "DISSOLVED";
+        desc = "Full mediation — info/physics distinction dissolved";
+      }
+
+      return (
+        <div style={{ textAlign: "center", padding: "8px 0" }}>
+          <div style={{
+            fontSize: 14,
+            letterSpacing: "0.3em",
+            color: mu < 0.3 ? GLOW_DIM : mu < 0.7 ? GLOW_CYAN : PULSE_GOLD,
+            fontFamily: "monospace",
+            fontWeight: 300,
+            marginBottom: 4,
+          }}>
+            {label}
+          </div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", fontFamily: "sans-serif" }}>{desc}</div>
+        </div>
+      );
+    }
+
+    // ── Constraint Flow Viz ──
+    function ConstraintFlow({ mu, tension, fieldDensity }) {
+      const upAlpha = clamp(fieldDensity * mu, 0, 0.8);
+      const downAlpha = clamp(tension * mu, 0, 0.8);
+
+      return (
+        <svg width="100%" height="60" viewBox="0 0 300 60">
+          <text x="20" y="15" fill="rgba(255,255,255,0.2)" fontSize="8" fontFamily="monospace">Physical</text>
+          <text x="20" y="55" fill="rgba(255,255,255,0.2)" fontSize="8" fontFamily="monospace">Information</text>
+
+          {[0, 1, 2, 3, 4].map((i) => {
+            const x = 80 + i * 45;
+            const phase = (Date.now() * 0.003 + i * 0.5) % 1;
+            return (
+              <g key={`up-${i}`}>
+                <line x1={x} y1={20 - phase * 15} x2={x} y2={45 + phase * 5}
+                  stroke={GLOW_CYAN} strokeWidth="1" opacity={upAlpha * (0.3 + phase * 0.5)} />
+                <polygon points={`${x - 3},${25 - phase * 10} ${x + 3},${25 - phase * 10} ${x},${18 - phase * 10}`}
+                  fill={GLOW_CYAN} opacity={upAlpha * 0.6} />
+              </g>
+            );
+          })}
+
+          {[0, 1, 2, 3, 4].map((i) => {
+            const x = 100 + i * 45;
+            const phase = (Date.now() * 0.002 + i * 0.7) % 1;
+            return (
+              <g key={`down-${i}`}>
+                <line x1={x} y1={15 + phase * 5} x2={x} y2={40 + phase * 15}
+                  stroke={PULSE_GOLD} strokeWidth="1" opacity={downAlpha * (0.3 + phase * 0.5)} />
+                <polygon points={`${x - 3},${38 + phase * 10} ${x + 3},${38 + phase * 10} ${x},${45 + phase * 10}`}
+                  fill={PULSE_GOLD} opacity={downAlpha * 0.6} />
+              </g>
+            );
+          })}
+
+          <rect x="70" y="22" width="220" height="16" rx="2" fill="none" stroke="rgba(74,240,208,0.08)" strokeWidth="0.5" strokeDasharray="3,3" />
+          <text x="150" y="33" textAnchor="middle" fill={`rgba(74,240,208,${mu * 0.4})`} fontSize="7" fontFamily="monospace">
+            Mediation Layer μ={mu.toFixed(2)}
+          </text>
+        </svg>
+      );
+    }
+
+    // ── Metric Row ──
+    function MetricRow({ label, value, unit, color = "rgba(255,255,255,0.5)" }) {
+      return (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>{label}</span>
+          <span style={{ color, fontSize: 13, fontFamily: "monospace", fontWeight: 300 }}>
+            {typeof value === "number" ? value.toFixed(3) : value}
+            {unit && <span style={{ fontSize: 9, opacity: 0.5, marginLeft: 3 }}>{unit}</span>}
+          </span>
+        </div>
+      );
+    }
+
+    // ── Tab Navigation ──
+    function TabNav({ active, onChange }) {
+      const tabs = [
+        { id: "field", label: "Field", icon: "◎" },
+        { id: "state", label: "State", icon: "≡" },
+      ];
+
+      return (
+        <div style={{ display: "flex", borderBottom: "1px solid rgba(74,240,208,0.08)", marginBottom: 12 }}>
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => onChange(tab.id)}
+              style={{
+                flex: 1,
+                padding: "10px 0",
+                background: "transparent",
+                border: "none",
+                borderBottom: active === tab.id ? `2px solid ${GLOW_CYAN}` : "2px solid transparent",
+                color: active === tab.id ? GLOW_CYAN : "rgba(255,255,255,0.2)",
+                fontSize: 11,
+                fontFamily: "monospace",
+                cursor: "pointer",
+                transition: "all 0.3s ease",
+                letterSpacing: "0.1em",
+              }}
+            >
+              <span style={{ fontSize: 14, display: "block", marginBottom: 2 }}>{tab.icon}</span>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════
+    // ███ MAIN APP ███
+    // ═══════════════════════════════════════
+
+    function VoidMediator() {
+      const sensors = useSensors();
+      const phase = usePhaseGear(sensors);
+      const [tab, setTab] = useState("field");
+      const [started, setStarted] = useState(false);
+
+      const requestPermissions = useCallback(async () => {
+        if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+          try {
+            await DeviceMotionEvent.requestPermission();
+            await DeviceOrientationEvent.requestPermission();
+          } catch (e) { /* denied */ }
+        }
+        setStarted(true);
+      }, []);
+
+      // Splash / Permission screen
+      if (!started) {
+        return (
+          <div style={{
+            minHeight: "100vh",
+            background: VOID_BLACK,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            fontFamily: "monospace",
+          }}>
+            <div style={{ textAlign: "center", maxWidth: 320 }}>
+              <div style={{ marginBottom: 32 }}>
+                <svg width="80" height="80" viewBox="0 0 80 80">
+                  <circle cx="40" cy="40" r="35" fill="none" stroke={GLOW_DIM} strokeWidth="0.5" />
+                  <circle cx="40" cy="40" r="25" fill="none" stroke={GLOW_CYAN} strokeWidth="0.8" opacity="0.5">
+                    <animate attributeName="r" values="25;28;25" dur="3s" repeatCount="indefinite" />
+                  </circle>
+                  <circle cx="40" cy="40" r="3" fill={GLOW_CYAN} opacity="0.6">
+                    <animate attributeName="opacity" values="0.6;0.2;0.6" dur="2s" repeatCount="indefinite" />
+                  </circle>
+                  <circle cx="40" cy="40" r="15" fill="none" stroke="rgba(74,240,208,0.15)" strokeWidth="0.5" strokeDasharray="2,4">
+                    <animateTransform attributeName="transform" type="rotate" values="0 40 40;360 40 40" dur="20s" repeatCount="indefinite" />
+                  </circle>
+                </svg>
+              </div>
+
+              <div style={{ color: GLOW_CYAN, fontSize: 16, letterSpacing: "0.3em", marginBottom: 8, fontWeight: 300 }}>
+                VOID MEDIATOR
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, letterSpacing: "0.2em", marginBottom: 32 }}>
+                v0.1 — PHASE-LAW ARCHITECTURE
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.12)", fontSize: 10, lineHeight: 1.8, marginBottom: 32 }}>
+                Bridging the discontinuity<br />between information and physics
+              </div>
+
+              <button
+                onClick={requestPermissions}
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${GLOW_DIM}`,
+                  color: GLOW_CYAN,
+                  padding: "12px 32px",
+                  borderRadius: 6,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  letterSpacing: "0.2em",
+                  cursor: "pointer",
+                  transition: "all 0.3s ease",
+                }}
+              >
+                ACTIVATE FIELD
+              </button>
+
+              <div style={{ color: "rgba(255,255,255,0.08)", fontSize: 8, marginTop: 16, lineHeight: 1.6 }}>
+                Requires sensor access<br />(accelerometer, orientation, audio)
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      const uiOpacity = clamp(1.1 - phase.mu * 0.4, 0.3, 1);
+
+      return (
+        <div style={{
+          minHeight: "100vh",
+          background: VOID_BLACK,
+          color: "rgba(255,255,255,0.6)",
+          fontFamily: "monospace",
+          padding: "12px 16px",
+          maxWidth: 400,
+          margin: "0 auto",
+          transition: "opacity 0.5s ease",
+          opacity: uiOpacity,
+        }}>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div>
+              <span style={{ color: GLOW_CYAN, fontSize: 13, letterSpacing: "0.2em", fontWeight: 300 }}>VOID MEDIATOR</span>
+              <span style={{ color: "rgba(255,255,255,0.1)", fontSize: 9, marginLeft: 8 }}>v0.1</span>
+            </div>
+            <StatusBadge available={sensors.available} />
+          </div>
+
+          <FieldStateLabel mu={phase.mu} />
+          <TabNav active={tab} onChange={setTab} />
+
+          {/* Tab: Field */}
+          {tab === "field" && (
+            <div>
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+                <FieldCanvas
+                  mu={phase.mu}
+                  fieldDensity={phase.fieldDensity}
+                  fieldVector={phase.fieldVector}
+                  motionEnergy={phase.motionEnergy}
+                  constraintTension={phase.constraintTension}
+                />
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
+                <MuGauge mu={phase.mu} label="μ" />
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 8, marginBottom: 4, letterSpacing: "0.1em" }}>
+                    μ HISTORY (120 SAMPLES)
+                  </div>
+                  <Sparkline data={phase.history} width={200} height={50} />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 8 }}>
+                <ConstraintFlow mu={phase.mu} tension={phase.constraintTension} fieldDensity={phase.fieldDensity} />
+              </div>
+            </div>
+          )}
+
+          {/* Tab: State */}
+          {tab === "state" && (
+            <div>
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: "0.15em", marginBottom: 8 }}>
+                  PHASE GEAR PARAMETERS
+                </div>
+                <MetricRow label="μ (Mediation)" value={phase.mu} color={phase.mu > 0.5 ? PULSE_GOLD : GLOW_CYAN} />
+                <MetricRow label="Gear Ratio" value={phase.phaseGearRatio} unit="×" color={GLOW_CYAN} />
+                <MetricRow label="Constraint Tension" value={phase.constraintTension} color={phase.constraintTension > 0.5 ? WARN_RED : GLOW_DIM} />
+                <MetricRow label="Field Density" value={phase.fieldDensity} color={GLOW_CYAN} />
+                <MetricRow label="Motion Energy" value={phase.motionEnergy} color={PULSE_GOLD} />
+                <MetricRow label="Env. Complexity" value={phase.environmentalComplexity} color={GLOW_DIM} />
+              </div>
+
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: "0.15em", marginBottom: 8 }}>
+                  RAW SENSOR DATA
+                </div>
+                <MetricRow label="accel.x" value={sensors.accel.x} unit="m/s²" />
+                <MetricRow label="accel.y" value={sensors.accel.y} unit="m/s²" />
+                <MetricRow label="accel.z" value={sensors.accel.z} unit="m/s²" />
+                <MetricRow label="gyro.β" value={sensors.gyro.beta} unit="°" />
+                <MetricRow label="gyro.γ" value={sensors.gyro.gamma} unit="°" />
+                <MetricRow label="audio" value={sensors.audioLevel} />
+              </div>
+
+              <div style={{
+                background: "rgba(74,240,208,0.02)",
+                border: "1px solid rgba(74,240,208,0.06)",
+                borderRadius: 6,
+                padding: 10,
+                textAlign: "center",
+              }}>
+                <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 8, letterSpacing: "0.1em", marginBottom: 6 }}>
+                  μ DYNAMICS
+                </div>
+                <div style={{ color: GLOW_DIM, fontSize: 11 }}>
+                  dμ/dt = α(μ_env − μ) + β·∇ρ(x)
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.1)", fontSize: 8, marginTop: 4 }}>α=0.08 β=0.04</div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Render ──
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<VoidMediator />);
+  </script>
+</body>
+</html>

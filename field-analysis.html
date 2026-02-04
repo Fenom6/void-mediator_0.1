@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Void Mediator — Field Analysis</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
+
+  :root {
+    --void-black: #050508;
+    --void-surface: #0a0a10;
+    --void-card: #0e0e16;
+    --void-border: #1a1a2a;
+    --glow-cyan: #4af0d0;
+    --glow-dim: #1a6a5a;
+    --glow-faint: #0d352d;
+    --pulse-gold: #d4a843;
+    --pulse-gold-dim: #6a5422;
+    --warn-red: #c44a3a;
+    --warn-red-dim: #622520;
+    --text-primary: #b0b0c0;
+    --text-secondary: #606080;
+    --text-ghost: #303048;
+    --text-muted: #404060;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--void-black);
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 300;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px 24px;
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--void-border);
+    margin-bottom: 20px;
+  }
+
+  header h1 {
+    font-size: 14px;
+    font-weight: 300;
+    letter-spacing: 0.3em;
+    color: var(--glow-cyan);
+  }
+
+  header .sub {
+    font-size: 9px;
+    color: var(--text-ghost);
+    letter-spacing: 0.15em;
+  }
+
+  .stats-bar {
+    display: flex;
+    gap: 16px;
+    font-size: 9px;
+    color: var(--text-ghost);
+    letter-spacing: 0.1em;
+  }
+  .stats-bar .val { color: var(--glow-dim); margin-left: 4px; }
+
+  /* Drop zone */
+  .dropzone {
+    border: 1px dashed var(--void-border);
+    border-radius: 8px;
+    padding: 60px 40px;
+    text-align: center;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+    margin-bottom: 24px;
+  }
+  .dropzone.dragover {
+    border-color: var(--glow-cyan);
+    background: rgba(74, 240, 208, 0.03);
+  }
+  .dropzone.loaded {
+    padding: 12px 20px;
+    border-color: var(--glow-dim);
+  }
+  .dropzone h2 {
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--text-secondary);
+    letter-spacing: 0.2em;
+    margin-bottom: 8px;
+  }
+  .dropzone p {
+    font-size: 9px;
+    color: var(--text-ghost);
+  }
+  .dropzone .loaded-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+  }
+  .dropzone .loaded-info .filename { color: var(--glow-cyan); }
+  .dropzone .loaded-info .meta { color: var(--text-ghost); font-size: 9px; }
+  .dropzone .loaded-info .reload {
+    color: var(--text-ghost);
+    cursor: pointer;
+    font-size: 9px;
+    border: 1px solid var(--void-border);
+    padding: 2px 8px;
+    border-radius: 3px;
+    transition: all 0.2s;
+  }
+  .dropzone .loaded-info .reload:hover {
+    color: var(--glow-cyan);
+    border-color: var(--glow-dim);
+  }
+
+  input[type="file"] { display: none; }
+
+  /* Charts */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .chart-grid.two-col {
+    grid-template-columns: 1fr 1fr;
+  }
+  @media (max-width: 800px) {
+    .chart-grid.two-col { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--void-card);
+    border-radius: 8px;
+    padding: 16px;
+    border: 1px solid transparent;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: var(--void-border); }
+
+  .card-title {
+    font-size: 9px;
+    color: var(--text-ghost);
+    letter-spacing: 0.15em;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+  }
+
+  canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  /* Phase bands legend */
+  .phase-legend {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .phase-legend .item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 8px;
+    color: var(--text-ghost);
+  }
+  .phase-legend .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  /* Insight panel */
+  .insights {
+    background: var(--void-card);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .insights h3 {
+    font-size: 9px;
+    color: var(--text-ghost);
+    letter-spacing: 0.15em;
+    margin-bottom: 12px;
+  }
+  .insight-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.02);
+    font-size: 10px;
+  }
+  .insight-row .label { color: var(--text-ghost); }
+  .insight-row .value { color: var(--glow-dim); }
+  .insight-row .value.warn { color: var(--pulse-gold); }
+  .insight-row .value.danger { color: var(--warn-red); }
+  .insight-row .value.good { color: var(--glow-cyan); }
+
+  .tuning-box {
+    background: rgba(74, 240, 208, 0.03);
+    border: 1px solid var(--glow-faint);
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 12px;
+  }
+  .tuning-box h4 {
+    font-size: 9px;
+    color: var(--glow-dim);
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+  }
+  .tuning-box p {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+  .tuning-box code {
+    color: var(--glow-cyan);
+    background: rgba(74,240,208,0.06);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 10px;
+  }
+
+  /* Annotation panel */
+  .annotations {
+    margin-top: 16px;
+  }
+  .annotation-input {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .annotation-input input[type="text"] {
+    flex: 1;
+    background: var(--void-surface);
+    border: 1px solid var(--void-border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    outline: none;
+  }
+  .annotation-input input[type="text"]:focus {
+    border-color: var(--glow-dim);
+  }
+  .annotation-input input[type="text"]::placeholder {
+    color: var(--text-ghost);
+  }
+  .annotation-input button {
+    background: transparent;
+    border: 1px solid var(--glow-dim);
+    color: var(--glow-cyan);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    letter-spacing: 0.1em;
+    transition: all 0.2s;
+  }
+  .annotation-input button:hover {
+    background: rgba(74,240,208,0.06);
+  }
+  .annotation-list {
+    font-size: 9px;
+    color: var(--text-ghost);
+  }
+  .annotation-list .ann-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.02);
+  }
+  .annotation-list .ann-time { color: var(--glow-dim); }
+  .annotation-list .ann-text { color: var(--text-secondary); }
+  .annotation-list .ann-delete {
+    color: var(--text-ghost);
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  .annotation-list .ann-delete:hover { color: var(--warn-red); }
+
+  .hidden { display: none; }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed;
+    background: var(--void-surface);
+    border: 1px solid var(--void-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 9px;
+    color: var(--text-primary);
+    pointer-events: none;
+    z-index: 100;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .tooltip.visible { opacity: 1; }
+  .tooltip .tt-label { color: var(--text-ghost); }
+  .tooltip .tt-val { color: var(--glow-cyan); margin-left: 4px; }
+
+  footer {
+    text-align: center;
+    padding: 24px 0;
+    font-size: 8px;
+    color: var(--text-ghost);
+    letter-spacing: 0.15em;
+    opacity: 0.4;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div>
+      <h1>VOID MEDIATOR</h1>
+      <div class="sub">FIELD ANALYSIS DASHBOARD — POST-WALK μ DYNAMICS</div>
+    </div>
+    <div class="stats-bar" id="statsBar"></div>
+  </header>
+
+  <!-- Drop Zone -->
+  <div class="dropzone" id="dropzone">
+    <div id="dropEmpty">
+      <h2>DROP CSV HERE</h2>
+      <p>field_YYYYMMDD_HHmmss.csv from FieldLogger</p>
+      <p style="margin-top:8px; color: var(--text-ghost); opacity:0.5;">or click to browse</p>
+    </div>
+    <div id="dropLoaded" class="hidden">
+      <div class="loaded-info">
+        <span class="filename" id="fileName"></span>
+        <span class="meta" id="fileMeta"></span>
+        <span class="reload" id="reloadBtn">↻ RELOAD</span>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="fileInput" accept=".csv">
+
+  <!-- Dashboard (hidden until CSV loaded) -->
+  <div id="dashboard" class="hidden">
+
+    <!-- μ Timeline -->
+    <div class="chart-grid">
+      <div class="card">
+        <div class="card-title">μ DYNAMICS — TIMELINE</div>
+        <canvas id="muChart" height="200"></canvas>
+        <div class="phase-legend">
+          <span class="item"><span class="dot" style="background:#1a2a3a"></span> VOID (&lt;0.15)</span>
+          <span class="item"><span class="dot" style="background:#1a3a2a"></span> LATENT</span>
+          <span class="item"><span class="dot" style="background:#2a4a3a"></span> MEDIATING</span>
+          <span class="item"><span class="dot" style="background:#3a5a2a"></span> COHERENT</span>
+          <span class="item"><span class="dot" style="background:#4a3a2a"></span> DISSOLVED (&gt;0.75)</span>
+        </div>
+
+        <!-- Annotations -->
+        <div class="annotations">
+          <div class="annotation-input">
+            <input type="text" id="annTimeInput" placeholder="time (e.g. 05:23)" style="width:80px; flex:none;">
+            <input type="text" id="annTextInput" placeholder="memo (e.g. 名駅前、人が多い)">
+            <button id="annAddBtn">+ ADD</button>
+          </div>
+          <div class="annotation-list" id="annList"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sensor Breakdown -->
+    <div class="chart-grid two-col">
+      <div class="card">
+        <div class="card-title">SENSOR CONTRIBUTIONS — STACKED</div>
+        <canvas id="sensorChart" height="180"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-title">WiFi FRESHNESS — STALENESS OVERLAY</div>
+        <canvas id="wifiChart" height="180"></canvas>
+      </div>
+    </div>
+
+    <!-- Phase Distribution + Constraint -->
+    <div class="chart-grid two-col">
+      <div class="card">
+        <div class="card-title">FIELD PHASE DISTRIBUTION</div>
+        <canvas id="phaseDistChart" height="160"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-title">CONSTRAINT TENSION vs μ</div>
+        <canvas id="tensionChart" height="160"></canvas>
+      </div>
+    </div>
+
+    <!-- Insights -->
+    <div class="insights">
+      <h3>FIELD ANALYSIS INSIGHTS</h3>
+      <div id="insightRows"></div>
+      <div class="tuning-box" id="tuningBox"></div>
+    </div>
+  </div>
+
+  <footer>Phase-Law Architecture / pTCP — Void Mediator Field Analysis v0.1</footer>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ═══════════════════════════════════════════════════
+// Void Mediator — Field Analysis Dashboard
+// ═══════════════════════════════════════════════════
+
+const COLORS = {
+  cyan: '#4af0d0', dim: '#1a6a5a', faint: '#0d352d',
+  gold: '#d4a843', goldDim: '#6a5422',
+  red: '#c44a3a', redDim: '#622520',
+  text: '#b0b0c0', ghost: '#303048', secondary: '#606080',
+  bg: '#050508', surface: '#0a0a10', card: '#0e0e16',
+  phases: {
+    VOID: 'rgba(26,42,58,0.4)',
+    LATENT: 'rgba(26,58,42,0.4)',
+    MEDIATING: 'rgba(42,74,58,0.4)',
+    COHERENT: 'rgba(58,90,42,0.4)',
+    DISSOLVED: 'rgba(74,58,42,0.4)',
+  }
+};
+
+let data = [];
+let annotations = [];
+
+// ── CSV Parsing ──
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim());
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = lines[i].split(',');
+    if (vals.length < headers.length) continue;
+    const row = {};
+    headers.forEach((h, j) => {
+      const v = vals[j]?.trim();
+      if (h === 'time' || h === 'field_phase' || h === 'wifi_stale') {
+        row[h] = v;
+      } else {
+        row[h] = parseFloat(v);
+      }
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
+// ── Drop Zone ──
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+
+dropzone.addEventListener('click', () => {
+  if (data.length === 0) fileInput.click();
+});
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
+});
+document.getElementById('reloadBtn').addEventListener('click', e => {
+  e.stopPropagation();
+  fileInput.click();
+});
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    data = parseCSV(e.target.result);
+    if (data.length === 0) return;
+    annotations = [];
+
+    document.getElementById('dropEmpty').classList.add('hidden');
+    document.getElementById('dropLoaded').classList.remove('hidden');
+    dropzone.classList.add('loaded');
+    document.getElementById('fileName').textContent = file.name;
+
+    const duration = data.length > 0 ? ((data[data.length-1].elapsed_ms - data[0].elapsed_ms) / 1000).toFixed(0) : 0;
+    document.getElementById('fileMeta').textContent =
+      `${data.length} samples · ${Math.floor(duration/60)}m${(duration%60).toString().padStart(2,'0')}s`;
+
+    updateStats();
+    document.getElementById('dashboard').classList.remove('hidden');
+    renderAll();
+  };
+  reader.readAsText(file);
+}
+
+function updateStats() {
+  const mus = data.map(d => d.mu);
+  const bar = document.getElementById('statsBar');
+  bar.innerHTML = [
+    `μ̄=<span class="val">${avg(mus).toFixed(3)}</span>`,
+    `μ_max=<span class="val">${Math.max(...mus).toFixed(3)}</span>`,
+    `σ_μ=<span class="val">${std(mus).toFixed(3)}</span>`,
+    `phases=<span class="val">${new Set(data.map(d=>d.field_phase)).size}</span>`,
+  ].join('&nbsp;&nbsp;');
+}
+
+// ── Math Helpers ──
+function avg(a) { return a.reduce((s,v) => s+v, 0) / a.length; }
+function std(a) { const m = avg(a); return Math.sqrt(a.reduce((s,v) => s + (v-m)**2, 0) / a.length); }
+
+// ── Canvas Helpers ──
+function getCtx(id) {
+  const c = document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const rect = c.getBoundingClientRect();
+  c.width = rect.width * dpr;
+  c.height = rect.height * dpr;
+  const ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { ctx, w: rect.width, h: rect.height, canvas: c };
+}
+
+function drawTimeAxis(ctx, w, h, data, yBottom) {
+  ctx.fillStyle = COLORS.ghost;
+  ctx.font = '9px JetBrains Mono';
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(data.length / 8));
+  for (let i = 0; i < data.length; i += step) {
+    const x = (i / (data.length - 1)) * (w - 60) + 40;
+    const t = data[i].time || '';
+    const short = t.length > 5 ? t.substring(0, 5) : t;
+    ctx.fillText(short, x, yBottom + 14);
+  }
+}
+
+// ── Render: μ Timeline ──
+function renderMuChart() {
+  const { ctx, w, h } = getCtx('muChart');
+  const pad = { l: 40, r: 20, t: 10, b: 30 };
+  const cw = w - pad.l - pad.r;
+  const ch = h - pad.t - pad.b;
+
+  // Phase bands
+  const thresholds = [0, 0.15, 0.35, 0.55, 0.75, 1.0];
+  const phaseColors = [COLORS.phases.VOID, COLORS.phases.LATENT, COLORS.phases.MEDIATING, COLORS.phases.COHERENT, COLORS.phases.DISSOLVED];
+  for (let i = 0; i < 5; i++) {
+    const y1 = pad.t + ch * (1 - thresholds[i+1]);
+    const y2 = pad.t + ch * (1 - thresholds[i]);
+    ctx.fillStyle = phaseColors[i];
+    ctx.fillRect(pad.l, y1, cw, y2 - y1);
+  }
+
+  // Y-axis labels
+  ctx.fillStyle = COLORS.ghost;
+  ctx.font = '9px JetBrains Mono';
+  ctx.textAlign = 'right';
+  for (let v = 0; v <= 1; v += 0.25) {
+    const y = pad.t + ch * (1 - v);
+    ctx.fillText(v.toFixed(2), pad.l - 6, y + 3);
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cw, y); ctx.stroke();
+  }
+
+  // μ line
+  if (data.length < 2) return;
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.cyan;
+  ctx.lineWidth = 1.2;
+  data.forEach((d, i) => {
+    const x = pad.l + (i / (data.length - 1)) * cw;
+    const y = pad.t + ch * (1 - d.mu);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Field density (dimmer)
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.dim;
+  ctx.lineWidth = 0.8;
+  ctx.setLineDash([3, 3]);
+  data.forEach((d, i) => {
+    const x = pad.l + (i / (data.length - 1)) * cw;
+    const y = pad.t + ch * (1 - d.field_density);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Annotations
+  annotations.forEach(ann => {
+    const idx = findTimeIndex(ann.time);
+    if (idx < 0) return;
+    const x = pad.l + (idx / (data.length - 1)) * cw;
+    ctx.strokeStyle = COLORS.gold;
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + ch); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = COLORS.gold;
+    ctx.font = '8px JetBrains Mono';
+    ctx.textAlign = 'left';
+    ctx.fillText(ann.text, x + 3, pad.t + 12);
+  });
+
+  // Time axis
+  drawTimeAxis(ctx, w, h, data, pad.t + ch);
+
+  // Legend
+  ctx.font = '8px JetBrains Mono';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = COLORS.cyan; ctx.fillText('— μ', w - pad.r, pad.t + 10);
+  ctx.fillStyle = COLORS.dim; ctx.fillText('--- field_density', w - pad.r, pad.t + 22);
+}
+
+// ── Render: Sensor Stacked ──
+function renderSensorChart() {
+  const { ctx, w, h } = getCtx('sensorChart');
+  const pad = { l: 40, r: 20, t: 10, b: 30 };
+  const cw = w - pad.l - pad.r;
+  const ch = h - pad.t - pad.b;
+  if (data.length < 2) return;
+
+  const layers = [
+    { key: 'motion_energy', color: 'rgba(212,168,67,0.6)', label: 'motion' },
+    { key: 'audio_level', color: 'rgba(74,240,208,0.4)', label: 'audio' },
+    { key: 'wifi_density', color: 'rgba(26,106,90,0.6)', label: 'wifi' },
+  ];
+
+  // Stack
+  const stacked = data.map(d => {
+    let sum = 0;
+    return layers.map(l => {
+      const v = (d[l.key] || 0);
+      sum += v;
+      return sum;
+    });
+  });
+  const maxStack = Math.max(...stacked.map(s => s[s.length - 1]), 0.01);
+
+  // Draw from top layer down
+  for (let li = layers.length - 1; li >= 0; li--) {
+    ctx.fillStyle = layers[li].color;
+    ctx.beginPath();
+    data.forEach((_, i) => {
+      const x = pad.l + (i / (data.length - 1)) * cw;
+      const y = pad.t + ch * (1 - stacked[i][li] / maxStack);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    // Close bottom
+    const bottomY = li === 0 ? pad.t + ch : undefined;
+    if (li === 0) {
+      ctx.lineTo(pad.l + cw, pad.t + ch);
+      ctx.lineTo(pad.l, pad.t + ch);
+    } else {
+      for (let i = data.length - 1; i >= 0; i--) {
+        const x = pad.l + (i / (data.length - 1)) * cw;
+        const y = pad.t + ch * (1 - stacked[i][li - 1] / maxStack);
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Legend
+  ctx.font = '8px JetBrains Mono';
+  ctx.textAlign = 'right';
+  layers.forEach((l, i) => {
+    ctx.fillStyle = l.color.replace(/[\d.]+\)$/, '1)');
+    ctx.fillText(l.label, w - pad.r, pad.t + 10 + i * 12);
+  });
+
+  drawTimeAxis(ctx, w, h, data, pad.t + ch);
+}
+
+// ── Render: WiFi Freshness ──
+function renderWifiChart() {
+  const { ctx, w, h } = getCtx('wifiChart');
+  const pad = { l: 40, r: 20, t: 10, b: 30 };
+  const cw = w - pad.l - pad.r;
+  const ch = h - pad.t - pad.b;
+  if (data.length < 2) return;
+
+  // WiFi density line
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.dim;
+  ctx.lineWidth = 1;
+  data.forEach((d, i) => {
+    const x = pad.l + (i / (data.length - 1)) * cw;
+    const y = pad.t + ch * (1 - (d.wifi_density || 0));
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Stale regions (red overlay)
+  data.forEach((d, i) => {
+    if (d.wifi_stale === 'true' || d.wifi_stale === true) {
+      const x = pad.l + (i / (data.length - 1)) * cw;
+      const staleS = (d.wifi_stale_ms || 0) / 1000;
+      const intensity = Math.min(staleS / 60, 1) * 0.3;
+      ctx.fillStyle = `rgba(196, 74, 58, ${intensity})`;
+      ctx.fillRect(x - 1, pad.t, 3, ch);
+    }
+  });
+
+  // AP count (gold, secondary axis)
+  const maxAp = Math.max(...data.map(d => d.wifi_ap_count || 0), 1);
+  ctx.beginPath();
+  ctx.strokeStyle = COLORS.goldDim;
+  ctx.lineWidth = 0.8;
+  ctx.setLineDash([2, 2]);
+  data.forEach((d, i) => {
+    const x = pad.l + (i / (data.length - 1)) * cw;
+    const y = pad.t + ch * (1 - (d.wifi_ap_count || 0) / maxAp);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Legend
+  ctx.font = '8px JetBrains Mono';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = COLORS.dim; ctx.fillText('— density', w - pad.r, pad.t + 10);
+  ctx.fillStyle = COLORS.goldDim; ctx.fillText('--- AP count', w - pad.r, pad.t + 22);
+  ctx.fillStyle = COLORS.redDim; ctx.fillText('▮ stale', w - pad.r, pad.t + 34);
+
+  drawTimeAxis(ctx, w, h, data, pad.t + ch);
+}
+
+// ── Render: Phase Distribution ──
+function renderPhaseDistChart() {
+  const { ctx, w, h } = getCtx('phaseDistChart');
+  const pad = { l: 16, r: 16, t: 10, b: 10 };
+  const phases = ['VOID', 'LATENT', 'MEDIATING', 'COHERENT', 'DISSOLVED'];
+  const counts = {};
+  phases.forEach(p => counts[p] = 0);
+  data.forEach(d => { if (counts[d.field_phase] !== undefined) counts[d.field_phase]++; });
+  const total = data.length || 1;
+
+  const barH = 20;
+  const gap = 8;
+  const barArea = w - pad.l - pad.r - 100;
+  const phaseColors = [COLORS.ghost, COLORS.dim, COLORS.cyan, COLORS.gold, COLORS.red];
+
+  phases.forEach((p, i) => {
+    const y = pad.t + i * (barH + gap);
+    const pct = counts[p] / total;
+    const bw = pct * barArea;
+
+    // Bar
+    ctx.fillStyle = phaseColors[i];
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(pad.l + 80, y, bw, barH);
+    ctx.globalAlpha = 1;
+
+    // Label
+    ctx.fillStyle = COLORS.ghost;
+    ctx.font = '9px JetBrains Mono';
+    ctx.textAlign = 'right';
+    ctx.fillText(p, pad.l + 72, y + 14);
+
+    // Percentage
+    ctx.fillStyle = COLORS.text;
+    ctx.textAlign = 'left';
+    ctx.fillText(`${(pct * 100).toFixed(1)}%`, pad.l + 84 + bw, y + 14);
+  });
+}
+
+// ── Render: Constraint vs μ scatter ──
+function renderTensionChart() {
+  const { ctx, w, h } = getCtx('tensionChart');
+  const pad = { l: 40, r: 20, t: 10, b: 30 };
+  const cw = w - pad.l - pad.r;
+  const ch = h - pad.t - pad.b;
+
+  // Axes
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t + ch); ctx.lineTo(pad.l + cw, pad.t + ch); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + ch); ctx.stroke();
+
+  ctx.fillStyle = COLORS.ghost;
+  ctx.font = '8px JetBrains Mono';
+  ctx.textAlign = 'center';
+  ctx.fillText('μ', pad.l + cw / 2, pad.t + ch + 20);
+  ctx.save();
+  ctx.translate(12, pad.t + ch / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('tension', 0, 0);
+  ctx.restore();
+
+  // Points
+  const step = Math.max(1, Math.floor(data.length / 400));
+  for (let i = 0; i < data.length; i += step) {
+    const d = data[i];
+    const x = pad.l + d.mu * cw;
+    const y = pad.t + ch * (1 - (d.constraint_tension || 0));
+    ctx.fillStyle = `rgba(74, 240, 208, ${0.15 + d.mu * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Renegotiate threshold line
+  const ty = pad.t + ch * (1 - 0.5);
+  ctx.strokeStyle = COLORS.redDim;
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(pad.l, ty); ctx.lineTo(pad.l + cw, ty); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = COLORS.redDim;
+  ctx.font = '7px JetBrains Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText('RENEGOTIATE', pad.l + 4, ty - 4);
+}
+
+// ── Insights ──
+function renderInsights() {
+  const mus = data.map(d => d.mu);
+  const tensions = data.map(d => d.constraint_tension || 0);
+  const motions = data.map(d => d.motion_energy || 0);
+  const wifiStaleRatio = data.filter(d => d.wifi_stale === 'true' || d.wifi_stale === true).length / data.length;
+
+  const muAvg = avg(mus);
+  const muStd = std(mus);
+  const tensionAvg = avg(tensions);
+  const motionAvg = avg(motions);
+
+  // Phase transitions
+  let transitions = 0;
+  for (let i = 1; i < data.length; i++) {
+    if (data[i].field_phase !== data[i-1].field_phase) transitions++;
+  }
+
+  // μ response lag: how many samples until μ moves >0.02 after motion spike
+  let responseLags = [];
+  for (let i = 10; i < data.length - 20; i++) {
+    if (motions[i] > 0.3 && motions[i-1] < 0.1) {
+      for (let j = i; j < Math.min(i + 20, data.length); j++) {
+        if (Math.abs(mus[j] - mus[i]) > 0.02) {
+          responseLags.push(j - i);
+          break;
+        }
+      }
+    }
+  }
+  const avgLag = responseLags.length > 0 ? avg(responseLags) : null;
+
+  const rows = [
+    { label: 'μ mean', value: muAvg.toFixed(3), cls: '' },
+    { label: 'μ std deviation', value: muStd.toFixed(3), cls: muStd < 0.03 ? 'warn' : '' },
+    { label: 'Phase transitions', value: transitions.toString(), cls: transitions < 3 ? 'warn' : 'good' },
+    { label: 'Constraint tension (avg)', value: tensionAvg.toFixed(3), cls: tensionAvg > 0.5 ? 'danger' : '' },
+    { label: 'WiFi stale ratio', value: `${(wifiStaleRatio * 100).toFixed(0)}%`, cls: wifiStaleRatio > 0.5 ? 'warn' : 'good' },
+    { label: 'μ response lag (samples)', value: avgLag !== null ? avgLag.toFixed(1) : 'N/A', cls: avgLag && avgLag > 10 ? 'warn' : '' },
+  ];
+
+  const container = document.getElementById('insightRows');
+  container.innerHTML = rows.map(r =>
+    `<div class="insight-row">
+      <span class="label">${r.label}</span>
+      <span class="value ${r.cls}">${r.value}</span>
+    </div>`
+  ).join('');
+
+  // Tuning suggestions
+  const box = document.getElementById('tuningBox');
+  const suggestions = [];
+
+  if (muStd < 0.03) {
+    suggestions.push(`μの分散が極めて小さい (σ=${muStd.toFixed(3)})。<code>α</code> を上げる (0.08→0.12) と環境追従が速くなる。`);
+  }
+  if (muStd > 0.15) {
+    suggestions.push(`μの変動が大きすぎる (σ=${muStd.toFixed(3)})。<code>α</code> を下げる (0.08→0.05) で安定化。`);
+  }
+  if (avgLag && avgLag > 8) {
+    suggestions.push(`Motion spike → μ応答までの遅延が ${avgLag.toFixed(1)} samples (${(avgLag * 0.5).toFixed(1)}秒)。<code>β</code> を上げる (0.04→0.07) で勾配感度を強化。`);
+  }
+  if (wifiStaleRatio > 0.6) {
+    suggestions.push(`WiFiデータの ${(wifiStaleRatio*100).toFixed(0)}% が陳腐キャッシュ。WiFi寄与をさらに減衰させるか、<code>environmentalComplexity</code> のWiFi重み (0.5) を 0.3 に下げる。`);
+  }
+  if (transitions < 3 && data.length > 200) {
+    suggestions.push(`${data.length} サンプル中 ${transitions} 回しかフェーズ遷移していない。環境が単調か、閾値が粗すぎる可能性。歩行ルートに環境変化を含めて再テスト。`);
+  }
+  if (muAvg < 0.2) {
+    suggestions.push(`μ̄=${muAvg.toFixed(3)} — ほぼVOID状態。センサー許可が得られていない可能性。State Vector画面で各センサーの値を確認。`);
+  }
+
+  if (suggestions.length === 0) {
+    suggestions.push('顕著な異常は検出されませんでした。α=0.08, β=0.04 で引き続きデータ収集を。');
+  }
+
+  box.innerHTML = `
+    <h4>α/β TUNING HINTS</h4>
+    ${suggestions.map(s => `<p>→ ${s}</p>`).join('')}
+  `;
+}
+
+// ── Annotations ──
+function findTimeIndex(timeStr) {
+  if (!timeStr) return -1;
+  // Match HH:MM or MM:SS format
+  for (let i = 0; i < data.length; i++) {
+    const t = data[i].time || '';
+    if (t.includes(timeStr)) return i;
+  }
+  // Try matching elapsed minutes
+  const parts = timeStr.split(':');
+  if (parts.length === 2) {
+    const targetMs = (parseInt(parts[0]) * 60 + parseInt(parts[1])) * 1000;
+    let best = 0, bestDiff = Infinity;
+    data.forEach((d, i) => {
+      const diff = Math.abs(d.elapsed_ms - targetMs);
+      if (diff < bestDiff) { bestDiff = diff; best = i; }
+    });
+    if (bestDiff < 30000) return best;
+  }
+  return -1;
+}
+
+document.getElementById('annAddBtn').addEventListener('click', () => {
+  const time = document.getElementById('annTimeInput').value.trim();
+  const text = document.getElementById('annTextInput').value.trim();
+  if (!time || !text) return;
+  annotations.push({ time, text });
+  document.getElementById('annTimeInput').value = '';
+  document.getElementById('annTextInput').value = '';
+  renderAnnotationList();
+  renderMuChart();
+});
+
+function renderAnnotationList() {
+  const list = document.getElementById('annList');
+  list.innerHTML = annotations.map((a, i) =>
+    `<div class="ann-item">
+      <span><span class="ann-time">${a.time}</span> <span class="ann-text">${a.text}</span></span>
+      <span class="ann-delete" data-idx="${i}">×</span>
+    </div>`
+  ).join('');
+  list.querySelectorAll('.ann-delete').forEach(el => {
+    el.addEventListener('click', () => {
+      annotations.splice(parseInt(el.dataset.idx), 1);
+      renderAnnotationList();
+      renderMuChart();
+    });
+  });
+}
+
+// ── Render All ──
+function renderAll() {
+  renderMuChart();
+  renderSensorChart();
+  renderWifiChart();
+  renderPhaseDistChart();
+  renderTensionChart();
+  renderInsights();
+  renderAnnotationList();
+}
+
+// Resize handling
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (data.length > 0) renderAll(); }, 200);
+});
+</script>
+</body>
+</html>
