@@ -10,8 +10,8 @@
 
 ## 🌐 Live Demo
 
-- **Main App**: [https://yourusername.github.io/void-mediator/](https://yourusername.github.io/void-mediator/)
-- **Field Analysis**: [https://yourusername.github.io/void-mediator/field-analysis.html](https://yourusername.github.io/void-mediator/field-analysis.html)
+- **Main App**: [https://fenom6.github.io/void-mediator/](https://yourusername.github.io/void-mediator/)
+- **Field Analysis**: [https://fenom6.github.io/void-mediator/field-analysis.html](https://yourusername.github.io/void-mediator/field-analysis.html)
 
 ## 📱 Quick Start
 
