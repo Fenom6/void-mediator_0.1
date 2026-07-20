@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Void Mediator">
   <title>Void Mediator — Phase-Law Architecture</title>
-  
+
   <!-- PWA Manifest -->
   <link rel="manifest" href="data:application/json,{
     &quot;name&quot;: &quot;Void Mediator&quot;,
@@ -19,23 +19,24 @@
     &quot;background_color&quot;: &quot;#050508&quot;,
     &quot;theme_color&quot;: &quot;#050508&quot;
   }">
-  
+
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body, #root { 
-      height: 100%; 
-      background: #050508; 
+    html, body, #root {
+      height: 100%;
+      background: #050508;
       overflow-x: hidden;
       -webkit-tap-highlight-color: transparent;
     }
-    body { 
-      font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace; 
+    body {
+      font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
       -webkit-font-smoothing: antialiased;
     }
     /* Hide scrollbar but allow scrolling */
     ::-webkit-scrollbar { width: 0; height: 0; }
+    canvas { touch-action: none; }
   </style>
-  
+
   <!-- React & Babel -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -43,14 +44,24 @@
 </head>
 <body>
   <div id="root"></div>
-  
+
   <script type="text/babel">
     const { useState, useEffect, useRef, useCallback } = React;
 
     /* ═══════════════════════════════════════════════════════════
-       Void Mediator v0.1
+       Void Mediator v0.2
        Bridging the Discontinuity Between Information and Physics
        Phase Gear Engine — Phase-Law Architecture / pTCP
+
+       v0.2 evolution:
+       - Persistent render loop + ref-driven engine (no interval churn)
+       - devicePixelRatio-aware canvas, spatial-grid particle links
+       - Touch perturbation: observation disturbs the field
+       - Phase-transition log with haptic pulse + localStorage persistence
+       - FIELD LOG: CSV recorder compatible with field-analysis.html
+       - μ×ρ phase portrait
+       - Optional audio drone following μ (off by default)
+       - SIM mode: pointer-driven field when device sensors are absent
        ═══════════════════════════════════════════════════════════ */
 
     // ── Constants ──
@@ -62,139 +73,276 @@
     const PULSE_GOLD = "#d4a843";
     const WARN_RED = "#c44a3a";
 
+    const TICK_MS = 80;
+    const LS_TRANSITIONS = "vm.transitions.v2";
+    const LS_LAST_MU = "vm.lastMu.v2";
+
     // ── Utility ──
     const lerp = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
     const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const hms = (ts) => {
+      const d = new Date(ts);
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    };
 
-    // ── Sensor Hook ──
-    function useSensors() {
-      const [data, setData] = useState({
+    function phaseName(mu) {
+      if (mu < 0.15) return "VOID";
+      if (mu < 0.35) return "LATENT";
+      if (mu < 0.55) return "MEDIATING";
+      if (mu < 0.75) return "COHERENT";
+      return "DISSOLVED";
+    }
+
+    const PHASE_DESC = {
+      VOID: "Pure physical state — no connection to information",
+      LATENT: "Latent mediation — field emergence",
+      MEDIATING: "Mediation in progress — bidirectional constraint propagation",
+      COHERENT: "Field order established — guidance without command",
+      DISSOLVED: "Full mediation — info/physics distinction dissolved",
+    };
+
+    function loadTransitions() {
+      try {
+        const raw = localStorage.getItem(LS_TRANSITIONS);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.slice(-100) : [];
+      } catch (e) { return []; }
+    }
+
+    function loadLastMu() {
+      const v = parseFloat(localStorage.getItem(LS_LAST_MU));
+      return Number.isFinite(v) ? clamp(v, 0.02, 0.98) : 0.15;
+    }
+
+    // ── Sound Engine (drone following μ) ──
+    function createDrone() {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      const ctx = new Ctx();
+      const o1 = ctx.createOscillator();
+      const o2 = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+      o1.type = "sine";
+      o2.type = "sine";
+      filter.type = "lowpass";
+      filter.frequency.value = 300;
+      gain.gain.value = 0;
+      o1.connect(filter);
+      o2.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      o1.start();
+      o2.start();
+      return { ctx, o1, o2, filter, gain };
+    }
+
+    /* ═══════════════════════════════════════
+       Void Engine — sensors + phase gear in one
+       ref-driven core; React state published at low rate
+       ═══════════════════════════════════════ */
+    function useVoidEngine(started) {
+      const sensorsRef = useRef({
         accel: { x: 0, y: 0, z: 9.8 },
         gyro: { alpha: 0, beta: 0, gamma: 0 },
         light: 50,
-        geo: null,
         audioLevel: 0,
-        timestamp: Date.now(),
-        available: { motion: false, orientation: false, geo: false, audio: false },
+        geo: null,
       });
-
-      const audioCtxRef = useRef(null);
-      const analyserRef = useRef(null);
-      const audioDataRef = useRef(new Uint8Array(64));
-
-      useEffect(() => {
-        let mounted = true;
-
-        const handleMotion = (e) => {
-          if (!mounted) return;
-          const a = e.accelerationIncludingGravity || {};
-          setData((d) => ({
-            ...d,
-            accel: { x: a.x || 0, y: a.y || 0, z: a.z || 9.8 },
-            timestamp: Date.now(),
-            available: { ...d.available, motion: true },
-          }));
-        };
-
-        const handleOrientation = (e) => {
-          if (!mounted) return;
-          setData((d) => ({
-            ...d,
-            gyro: { alpha: e.alpha || 0, beta: e.beta || 0, gamma: e.gamma || 0 },
-            available: { ...d.available, orientation: true },
-          }));
-        };
-
-        const initAudio = async () => {
-          try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const src = ctx.createMediaStreamSource(stream);
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 128;
-            src.connect(analyser);
-            audioCtxRef.current = ctx;
-            analyserRef.current = analyser;
-          } catch (e) { /* mic not available */ }
-        };
-
-        let geoWatch = null;
-        if ("geolocation" in navigator) {
-          geoWatch = navigator.geolocation.watchPosition(
-            (pos) => {
-              if (!mounted) return;
-              setData((d) => ({
-                ...d,
-                geo: { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy },
-                available: { ...d.available, geo: true },
-              }));
-            },
-            () => {},
-            { enableHighAccuracy: false }
-          );
-        }
-
-        window.addEventListener("devicemotion", handleMotion);
-        window.addEventListener("deviceorientation", handleOrientation);
-        initAudio();
-
-        const audioInterval = setInterval(() => {
-          if (analyserRef.current && mounted) {
-            analyserRef.current.getByteFrequencyData(audioDataRef.current);
-            const avg = audioDataRef.current.reduce((s, v) => s + v, 0) / audioDataRef.current.length;
-            setData((d) => ({ ...d, audioLevel: avg / 255, available: { ...d.available, audio: true } }));
-          }
-        }, 100);
-
-        const lightInterval = setInterval(() => {
-          if (mounted) {
-            setData((d) => ({
-              ...d,
-              light: 30 + Math.sin(Date.now() / 8000) * 20 + Math.random() * 5,
-            }));
-          }
-        }, 500);
-
-        return () => {
-          mounted = false;
-          window.removeEventListener("devicemotion", handleMotion);
-          window.removeEventListener("deviceorientation", handleOrientation);
-          clearInterval(audioInterval);
-          clearInterval(lightInterval);
-          if (geoWatch) navigator.geolocation.clearWatch(geoWatch);
-          if (audioCtxRef.current) audioCtxRef.current.close();
-        };
-      }, []);
-
-      return data;
-    }
-
-    // ── Phase Gear Engine ──
-    function usePhaseGear(sensors) {
-      const [state, setState] = useState({
-        mu: 0.15,
+      const availableRef = useRef({ motion: false, orientation: false, audio: false, geo: false, light: false, sim: false });
+      const phaseRef = useRef({
+        mu: loadLastMu(),
         fieldDensity: 0,
         motionEnergy: 0,
         environmentalComplexity: 0,
         constraintTension: 0,
         phaseGearRatio: 1,
         fieldVector: { dx: 0, dy: 0, magnitude: 0 },
-        history: [],
       });
+      const touchRef = useRef({ active: false, dx: 0, dy: 0, energy: 0 });
+      const historyRef = useRef([]);
+      const transitionsRef = useRef(loadTransitions());
+      const recRef = useRef({ on: false, rows: [], t0: 0 });
+      const droneRef = useRef(null);
+      const soundOnRef = useRef(false);
+      const audioNodesRef = useRef({ analyser: null, data: new Uint8Array(64), ctx: null });
 
-      const prevRef = useRef({ accel: { x: 0, y: 0, z: 9.8 }, mu: 0.15 });
+      const [ui, setUi] = useState(() => ({
+        sensors: { ...sensorsRef.current },
+        available: { ...availableRef.current },
+        phase: { ...phaseRef.current },
+        history: [],
+        transitions: transitionsRef.current,
+        rec: { on: false, rows: 0, elapsed: 0 },
+        soundOn: false,
+      }));
+
+      // Mic — must be called after a user gesture
+      const enableMic = useCallback(async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          const ctx = new Ctx();
+          const src = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 128;
+          src.connect(analyser);
+          audioNodesRef.current.analyser = analyser;
+          audioNodesRef.current.ctx = ctx;
+          availableRef.current.audio = true;
+        } catch (e) { /* mic not available */ }
+      }, []);
+
+      const toggleSound = useCallback(() => {
+        if (!droneRef.current) droneRef.current = createDrone();
+        const d = droneRef.current;
+        if (!d) return;
+        const next = !soundOnRef.current;
+        soundOnRef.current = next;
+        if (next && d.ctx.state === "suspended") d.ctx.resume();
+        if (!next) d.gain.gain.setTargetAtTime(0, d.ctx.currentTime, 0.2);
+        setUi((u) => ({ ...u, soundOn: next }));
+      }, []);
+
+      const startRec = useCallback(() => {
+        recRef.current = { on: true, rows: [], t0: Date.now() };
+      }, []);
+      const stopRec = useCallback(() => {
+        recRef.current.on = false;
+      }, []);
+      const clearRec = useCallback(() => {
+        recRef.current = { on: false, rows: [], t0: 0 };
+      }, []);
+      const downloadRec = useCallback(() => {
+        const rows = recRef.current.rows;
+        if (!rows.length) return;
+        const header = "time,elapsed_ms,mu,field_density,motion_energy,env_complexity,constraint_tension,phase_gear_ratio,field_phase,accel_x,accel_y,accel_z,gyro_alpha,gyro_beta,gyro_gamma,audio_level,light_lux,wifi_ap_count,wifi_density,wifi_stale,wifi_stale_ms";
+        const csv = header + "\n" + rows.join("\n");
+        const blob = new Blob([csv], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const d = new Date();
+        a.href = url;
+        a.download = `void-field-log-${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}.csv`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }, []);
+
+      const clearTransitions = useCallback(() => {
+        transitionsRef.current = [];
+        try { localStorage.setItem(LS_TRANSITIONS, "[]"); } catch (e) {}
+        setUi((u) => ({ ...u, transitions: [] }));
+      }, []);
 
       useEffect(() => {
-        const interval = setInterval(() => {
-          const { accel, gyro, audioLevel, light } = sensors;
-          const prev = prevRef.current;
+        if (!started) return;
+        let mounted = true;
+        const S = sensorsRef.current;
+        const AV = availableRef.current;
+
+        // ── Raw sensor listeners: write to refs, no re-render ──
+        const handleMotion = (e) => {
+          const a = e.accelerationIncludingGravity || {};
+          S.accel = { x: a.x || 0, y: a.y || 0, z: a.z || 9.8 };
+          AV.motion = true;
+          AV.sim = false;
+        };
+        const handleOrientation = (e) => {
+          S.gyro = { alpha: e.alpha || 0, beta: e.beta || 0, gamma: e.gamma || 0 };
+          AV.orientation = true;
+        };
+        window.addEventListener("devicemotion", handleMotion);
+        window.addEventListener("deviceorientation", handleOrientation);
+
+        // ── Ambient light: real sensor when available, else slow drift ──
+        let lightSensor = null;
+        let lightInterval = null;
+        if ("AmbientLightSensor" in window) {
+          try {
+            lightSensor = new AmbientLightSensor({ frequency: 2 });
+            lightSensor.addEventListener("reading", () => {
+              // map lux (0..~10000) to 0..100 on a log scale
+              S.light = clamp((Math.log10(lightSensor.illuminance + 1) / 4) * 100, 0, 100);
+              AV.light = true;
+            });
+            lightSensor.start();
+          } catch (e) { lightSensor = null; }
+        }
+        if (!lightSensor) {
+          lightInterval = setInterval(() => {
+            S.light = 30 + Math.sin(Date.now() / 8000) * 20 + Math.random() * 5;
+          }, 500);
+        }
+
+        // ── Geolocation ──
+        let geoWatch = null;
+        if ("geolocation" in navigator) {
+          geoWatch = navigator.geolocation.watchPosition(
+            (pos) => {
+              S.geo = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
+              AV.geo = true;
+            },
+            () => {},
+            { enableHighAccuracy: false }
+          );
+        }
+
+        // ── SIM mode: no motion sensor → pointer drives the field ──
+        const simState = { px: 0.5, py: 0.5, lastX: 0.5, lastY: 0.5, speed: 0 };
+        const simTimer = setTimeout(() => {
+          if (!AV.motion) AV.sim = true;
+        }, 2500);
+        const handlePointer = (e) => {
+          const nx = e.clientX / window.innerWidth;
+          const ny = e.clientY / window.innerHeight;
+          simState.speed = clamp(Math.hypot(nx - simState.lastX, ny - simState.lastY) * 30, 0, 1);
+          simState.lastX = nx; simState.lastY = ny;
+          simState.px = nx; simState.py = ny;
+        };
+        window.addEventListener("pointermove", handlePointer);
+
+        // ── Phase Gear tick ──
+        const prev = { accel: { ...S.accel }, mu: phaseRef.current.mu, fieldDensity: 0, phase: phaseName(phaseRef.current.mu), pendingPhase: null, pendingCount: 0 };
+        let tickCount = 0;
+
+        const tick = setInterval(() => {
+          if (!mounted) return;
+          tickCount++;
+
+          // mic level
+          const an = audioNodesRef.current;
+          if (an.analyser) {
+            an.analyser.getByteFrequencyData(an.data);
+            S.audioLevel = an.data.reduce((s, v) => s + v, 0) / an.data.length / 255;
+          }
+
+          // SIM synthesis: breathing accel + pointer-driven tilt
+          if (AV.sim) {
+            const t = Date.now();
+            S.accel = {
+              x: Math.sin(t / 1300) * 0.12 + (Math.random() - 0.5) * 0.06 + simState.speed * (Math.random() - 0.5) * 3,
+              y: Math.cos(t / 1700) * 0.12 + (Math.random() - 0.5) * 0.06 + simState.speed * (Math.random() - 0.5) * 3,
+              z: 9.8 + Math.sin(t / 900) * 0.15,
+            };
+            S.gyro = {
+              alpha: 0,
+              beta: (simState.py - 0.5) * 60,
+              gamma: (simState.px - 0.5) * 60,
+            };
+            simState.speed *= 0.9;
+          }
+
+          const { accel, gyro, audioLevel, light } = S;
+          const touch = touchRef.current;
+          touch.energy *= 0.94;
 
           const jerk = Math.sqrt(
             (accel.x - prev.accel.x) ** 2 +
             (accel.y - prev.accel.y) ** 2 +
             (accel.z - prev.accel.z) ** 2
           );
-          const motionEnergy = clamp(jerk / 5, 0, 1);
+          const motionEnergy = clamp(jerk / 5 + touch.energy * 0.5, 0, 1);
           const envComplexity = clamp(audioLevel * 0.6 + (Math.abs(light - 50) / 50) * 0.4, 0, 1);
           const fieldDensity = clamp(motionEnergy * 0.4 + envComplexity * 0.6, 0, 1);
           const orientationMag = Math.sqrt(gyro.beta ** 2 + gyro.gamma ** 2) / 180;
@@ -203,16 +351,16 @@
 
           const alpha = 0.08;
           const beta = 0.04;
-          const mu_env = clamp(0.1 + fieldDensity * 0.6 + envComplexity * 0.3, 0, 1);
-          const gradRho = (fieldDensity - (prev.fieldDensity || 0)) * 10;
+          const mu_env = clamp(0.1 + fieldDensity * 0.6 + envComplexity * 0.3 + touch.energy * 0.25, 0, 1);
+          const gradRho = (fieldDensity - prev.fieldDensity) * 10;
           const dMu = alpha * (mu_env - prev.mu) + beta * gradRho;
           const mu = clamp(prev.mu + dMu, 0.02, 0.98);
 
-          const dx = gyro.gamma / 90;
-          const dy = gyro.beta / 90;
+          const dx = clamp(gyro.gamma / 90 + (touch.active ? touch.dx * 0.6 : 0), -1, 1);
+          const dy = clamp(gyro.beta / 90 + (touch.active ? touch.dy * 0.6 : 0), -1, 1);
           const mag = Math.sqrt(dx * dx + dy * dy);
 
-          const newState = {
+          phaseRef.current = {
             mu,
             fieldDensity,
             motionEnergy,
@@ -220,54 +368,196 @@
             constraintTension,
             phaseGearRatio,
             fieldVector: { dx, dy, magnitude: clamp(mag, 0, 1) },
-            history: [],
           };
 
-          setState((s) => ({
-            ...newState,
-            history: [...s.history.slice(-120), { mu, fieldDensity, t: Date.now() }],
-          }));
+          historyRef.current.push({ mu, fieldDensity, t: Date.now() });
+          if (historyRef.current.length > 180) historyRef.current.shift();
 
-          prevRef.current = { accel: { ...accel }, mu, fieldDensity };
-        }, 80);
+          // ── Phase transition detection (3-tick hysteresis) ──
+          const nowPhase = phaseName(mu);
+          if (nowPhase !== prev.phase) {
+            if (prev.pendingPhase === nowPhase) {
+              prev.pendingCount++;
+              if (prev.pendingCount >= 3) {
+                const tr = { t: Date.now(), from: prev.phase, to: nowPhase, mu: +mu.toFixed(3) };
+                transitionsRef.current = [...transitionsRef.current.slice(-99), tr];
+                try { localStorage.setItem(LS_TRANSITIONS, JSON.stringify(transitionsRef.current)); } catch (e) {}
+                if (navigator.vibrate) navigator.vibrate(nowPhase === "DISSOLVED" ? [15, 40, 15] : 12);
+                prev.phase = nowPhase;
+                prev.pendingPhase = null;
+                prev.pendingCount = 0;
+              }
+            } else {
+              prev.pendingPhase = nowPhase;
+              prev.pendingCount = 1;
+            }
+          } else {
+            prev.pendingPhase = null;
+            prev.pendingCount = 0;
+          }
 
-        return () => clearInterval(interval);
-      }, [sensors]);
+          // ── CSV recorder ──
+          const rec = recRef.current;
+          if (rec.on) {
+            const now = Date.now();
+            rec.rows.push([
+              new Date(now).toISOString(),
+              now - rec.t0,
+              mu.toFixed(4), fieldDensity.toFixed(4), motionEnergy.toFixed(4),
+              envComplexity.toFixed(4), constraintTension.toFixed(4), phaseGearRatio.toFixed(3),
+              nowPhase,
+              accel.x.toFixed(3), accel.y.toFixed(3), accel.z.toFixed(3),
+              gyro.alpha.toFixed(2), gyro.beta.toFixed(2), gyro.gamma.toFixed(2),
+              audioLevel.toFixed(4), light.toFixed(1),
+              0, 0, 0, 0,
+            ].join(","));
+          }
 
-      return state;
+          // ── Drone follows μ ──
+          if (soundOnRef.current && droneRef.current) {
+            const d = droneRef.current;
+            const t0 = d.ctx.currentTime;
+            const freq = 82.4 * Math.pow(2, mu * 1.6);
+            d.o1.frequency.setTargetAtTime(freq, t0, 0.15);
+            d.o2.frequency.setTargetAtTime(freq * 1.007, t0, 0.15);
+            d.filter.frequency.setTargetAtTime(180 + mu * 1400, t0, 0.2);
+            d.gain.gain.setTargetAtTime(0.015 + fieldDensity * 0.05, t0, 0.25);
+          }
+
+          // persist μ occasionally
+          if (tickCount % 60 === 0) {
+            try { localStorage.setItem(LS_LAST_MU, mu.toFixed(4)); } catch (e) {}
+          }
+
+          prev.accel = { ...accel };
+          prev.mu = mu;
+          prev.fieldDensity = fieldDensity;
+        }, TICK_MS);
+
+        // ── UI publish at ~8Hz ──
+        const publish = setInterval(() => {
+          if (!mounted) return;
+          const rec = recRef.current;
+          setUi({
+            sensors: { accel: { ...S.accel }, gyro: { ...S.gyro }, light: S.light, audioLevel: S.audioLevel, geo: S.geo },
+            available: { ...AV },
+            phase: { ...phaseRef.current },
+            history: historyRef.current.slice(),
+            transitions: transitionsRef.current,
+            rec: { on: rec.on, rows: rec.rows.length, elapsed: rec.on ? Date.now() - rec.t0 : 0 },
+            soundOn: soundOnRef.current,
+          });
+        }, 120);
+
+        return () => {
+          mounted = false;
+          clearInterval(tick);
+          clearInterval(publish);
+          clearTimeout(simTimer);
+          if (lightInterval) clearInterval(lightInterval);
+          if (lightSensor) try { lightSensor.stop(); } catch (e) {}
+          window.removeEventListener("devicemotion", handleMotion);
+          window.removeEventListener("deviceorientation", handleOrientation);
+          window.removeEventListener("pointermove", handlePointer);
+          if (geoWatch) navigator.geolocation.clearWatch(geoWatch);
+          if (audioNodesRef.current.ctx) audioNodesRef.current.ctx.close();
+          if (droneRef.current) droneRef.current.ctx.close();
+        };
+      }, [started]);
+
+      return {
+        ui, phaseRef, touchRef, enableMic, toggleSound,
+        rec: { start: startRec, stop: stopRec, clear: clearRec, download: downloadRec },
+        clearTransitions,
+      };
     }
 
-    // ── Particle Field Canvas ──
-    function FieldCanvas({ mu, fieldDensity, fieldVector, motionEnergy, constraintTension }) {
+    /* ═══════════════════════════════════════
+       Particle Field Canvas — mounts once,
+       persistent RAF loop reads phaseRef/touchRef
+       ═══════════════════════════════════════ */
+    function FieldCanvas({ phaseRef, touchRef }) {
       const canvasRef = useRef(null);
-      const particlesRef = useRef([]);
-      const frameRef = useRef(0);
+      const wrapRef = useRef(null);
 
       useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        const wrap = wrapRef.current;
+        if (!canvas || !wrap) return;
         const ctx = canvas.getContext("2d");
-        const W = canvas.width;
-        const H = canvas.height;
+        const dpr = window.devicePixelRatio || 1;
 
-        if (particlesRef.current.length === 0) {
-          for (let i = 0; i < 200; i++) {
-            particlesRef.current.push({
-              x: Math.random() * W,
-              y: Math.random() * H,
-              vx: (Math.random() - 0.5) * 0.5,
-              vy: (Math.random() - 0.5) * 0.5,
-              size: 1 + Math.random() * 2,
-              phase: Math.random() * TAU,
-              life: 0.3 + Math.random() * 0.7,
-            });
-          }
+        let W = 0, H = 0;
+        const resize = () => {
+          const size = clamp(wrap.clientWidth, 200, 380);
+          W = Math.round(size * dpr);
+          H = W;
+          canvas.width = W;
+          canvas.height = H;
+          canvas.style.width = size + "px";
+          canvas.style.height = size + "px";
+        };
+        resize();
+        window.addEventListener("resize", resize);
+
+        // particles in device-pixel space
+        const particles = [];
+        for (let i = 0; i < 170; i++) {
+          particles.push({
+            x: Math.random() * W,
+            y: Math.random() * H,
+            vx: (Math.random() - 0.5) * 0.5 * dpr,
+            vy: (Math.random() - 0.5) * 0.5 * dpr,
+            size: (1 + Math.random() * 2) * dpr,
+            phase: Math.random() * TAU,
+            life: 0.3 + Math.random() * 0.7,
+          });
         }
 
+        // touch state local to canvas (device px)
+        const pt = { active: false, x: 0, y: 0 };
+        const toCanvas = (e) => {
+          const r = canvas.getBoundingClientRect();
+          return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+        };
+        const writeTouch = (x, y, bump) => {
+          const t = touchRef.current;
+          t.active = pt.active;
+          t.dx = clamp((x - W / 2) / (W / 2), -1, 1);
+          t.dy = clamp((y - H / 2) / (H / 2), -1, 1);
+          if (bump) t.energy = clamp(t.energy + 0.18, 0, 1);
+        };
+        const onDown = (e) => {
+          pt.active = true;
+          const c = toCanvas(e);
+          pt.x = c.x; pt.y = c.y;
+          writeTouch(c.x, c.y, true);
+          canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
+        };
+        const onMove = (e) => {
+          if (!pt.active) return;
+          const c = toCanvas(e);
+          pt.x = c.x; pt.y = c.y;
+          writeTouch(c.x, c.y, true);
+        };
+        const onUp = () => {
+          pt.active = false;
+          touchRef.current.active = false;
+        };
+        canvas.addEventListener("pointerdown", onDown);
+        canvas.addEventListener("pointermove", onMove);
+        canvas.addEventListener("pointerup", onUp);
+        canvas.addEventListener("pointercancel", onUp);
+
+        let frame = 0;
         let raf;
+        const cell = 44 * dpr;
+
         const draw = () => {
-          frameRef.current++;
-          const t = frameRef.current * 0.02;
+          const p = phaseRef.current;
+          const { mu, fieldDensity, fieldVector, motionEnergy, constraintTension } = p;
+          frame++;
+          const t = frame * 0.02;
 
           ctx.fillStyle = VOID_BLACK;
           ctx.fillRect(0, 0, W, H);
@@ -279,60 +569,119 @@
           ctx.fillStyle = grad;
           ctx.fillRect(0, 0, W, H);
 
+          // constraint rings
           const ringCount = 3 + Math.floor(constraintTension * 5);
           for (let i = 0; i < ringCount; i++) {
             const phase = t * (0.3 + i * 0.1) + (i * TAU) / ringCount;
-            const radius = 30 + i * 40 + Math.sin(phase) * 15;
-            const cx = W / 2 + fieldVector.dx * 60;
-            const cy = H / 2 + fieldVector.dy * 60;
+            const radius = (30 + i * 40 + Math.sin(phase) * 15) * dpr;
+            const cx = W / 2 + fieldVector.dx * 60 * dpr;
+            const cy = H / 2 + fieldVector.dy * 60 * dpr;
             ctx.beginPath();
             ctx.arc(cx, cy, radius, 0, TAU);
             ctx.strokeStyle = `rgba(74,240,208,${(0.03 + mu * 0.08) * (1 - i / ringCount)})`;
-            ctx.lineWidth = 0.5 + mu * 1.5;
+            ctx.lineWidth = (0.5 + mu * 1.5) * dpr;
             ctx.stroke();
           }
 
-          particlesRef.current.forEach((p) => {
-            const fdx = fieldVector.dx * mu * 0.3;
-            const fdy = fieldVector.dy * mu * 0.3;
-            const nx = Math.sin(p.x * 0.01 + t) * 0.2;
-            const ny = Math.cos(p.y * 0.01 + t * 0.7) * 0.2;
+          // particle update
+          const touchR = 90 * dpr;
+          for (const q of particles) {
+            const fdx = fieldVector.dx * mu * 0.3 * dpr;
+            const fdy = fieldVector.dy * mu * 0.3 * dpr;
+            const nx = Math.sin(q.x * (0.01 / dpr) + t) * 0.2 * dpr;
+            const ny = Math.cos(q.y * (0.01 / dpr) + t * 0.7) * 0.2 * dpr;
 
-            p.vx = lerp(p.vx, fdx + nx, 0.05);
-            p.vy = lerp(p.vy, fdy + ny, 0.05);
-            p.x += p.vx + motionEnergy * (Math.random() - 0.5) * 2;
-            p.y += p.vy + motionEnergy * (Math.random() - 0.5) * 2;
+            q.vx = lerp(q.vx, fdx + nx, 0.05);
+            q.vy = lerp(q.vy, fdy + ny, 0.05);
 
-            if (p.x < 0) p.x += W;
-            if (p.x > W) p.x -= W;
-            if (p.y < 0) p.y += H;
-            if (p.y > H) p.y -= H;
-
-            p.phase += 0.02 + fieldDensity * 0.05;
-            const pulse = 0.3 + Math.sin(p.phase) * 0.3;
-            const alpha = p.life * pulse * (0.2 + mu * 0.6);
-
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size * (0.8 + mu * 0.5), 0, TAU);
-            ctx.fillStyle = `rgba(74,240,208,${alpha})`;
-            ctx.fill();
-
-            if (mu > 0.3) {
-              particlesRef.current.forEach((q) => {
-                const dist = Math.hypot(p.x - q.x, p.y - q.y);
-                if (dist < 40 * mu && dist > 5) {
-                  ctx.beginPath();
-                  ctx.moveTo(p.x, p.y);
-                  ctx.lineTo(q.x, q.y);
-                  ctx.strokeStyle = `rgba(74,240,208,${(1 - dist / (40 * mu)) * 0.08 * mu})`;
-                  ctx.lineWidth = 0.3;
-                  ctx.stroke();
-                }
-              });
+            // touch perturbation: observation disturbs the field
+            if (pt.active) {
+              const ddx = q.x - pt.x;
+              const ddy = q.y - pt.y;
+              const dist = Math.hypot(ddx, ddy);
+              if (dist < touchR && dist > 1) {
+                const force = (1 - dist / touchR) * 1.4 * dpr;
+                q.vx += (ddx / dist) * force;
+                q.vy += (ddy / dist) * force;
+              }
             }
-          });
 
-          const voidRadius = 20 + mu * 30;
+            q.x += q.vx + motionEnergy * (Math.random() - 0.5) * 2 * dpr;
+            q.y += q.vy + motionEnergy * (Math.random() - 0.5) * 2 * dpr;
+            q.vx *= 0.96;
+            q.vy *= 0.96;
+
+            if (q.x < 0) q.x += W;
+            if (q.x > W) q.x -= W;
+            if (q.y < 0) q.y += H;
+            if (q.y > H) q.y -= H;
+
+            q.phase += 0.02 + fieldDensity * 0.05;
+          }
+
+          // links via spatial grid — O(n) instead of O(n²)
+          if (mu > 0.3) {
+            const linkR = 40 * mu * dpr;
+            const grid = new Map();
+            particles.forEach((q, i) => {
+              const key = `${Math.floor(q.x / cell)},${Math.floor(q.y / cell)}`;
+              if (!grid.has(key)) grid.set(key, []);
+              grid.get(key).push(i);
+            });
+            let links = 0;
+            ctx.lineWidth = 0.3 * dpr;
+            for (let i = 0; i < particles.length && links < 400; i++) {
+              const q = particles[i];
+              const gx = Math.floor(q.x / cell);
+              const gy = Math.floor(q.y / cell);
+              for (let ox = -1; ox <= 1; ox++) {
+                for (let oy = -1; oy <= 1; oy++) {
+                  const bucket = grid.get(`${gx + ox},${gy + oy}`);
+                  if (!bucket) continue;
+                  for (const j of bucket) {
+                    if (j <= i) continue;
+                    const r = particles[j];
+                    const dist = Math.hypot(q.x - r.x, q.y - r.y);
+                    if (dist < linkR && dist > 5 * dpr) {
+                      ctx.beginPath();
+                      ctx.moveTo(q.x, q.y);
+                      ctx.lineTo(r.x, r.y);
+                      ctx.strokeStyle = `rgba(74,240,208,${(1 - dist / linkR) * 0.08 * mu})`;
+                      ctx.stroke();
+                      links++;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // particle draw
+          for (const q of particles) {
+            const pulse = 0.3 + Math.sin(q.phase) * 0.3;
+            const a = q.life * pulse * (0.2 + mu * 0.6);
+            ctx.beginPath();
+            ctx.arc(q.x, q.y, q.size * (0.8 + mu * 0.5), 0, TAU);
+            ctx.fillStyle = `rgba(74,240,208,${a})`;
+            ctx.fill();
+          }
+
+          // touch ripple
+          if (pt.active) {
+            const rr = (20 + Math.sin(frame * 0.15) * 6) * dpr;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, rr, 0, TAU);
+            ctx.strokeStyle = `rgba(212,168,67,${0.25 + touchRef.current.energy * 0.3})`;
+            ctx.lineWidth = 1 * dpr;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, rr * 1.8, 0, TAU);
+            ctx.strokeStyle = `rgba(212,168,67,${0.1 * touchRef.current.energy})`;
+            ctx.stroke();
+          }
+
+          // void core
+          const voidRadius = (20 + mu * 30) * dpr;
           const voidGrad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, voidRadius);
           voidGrad.addColorStop(0, `rgba(5,5,8,${1 - mu * 0.5})`);
           voidGrad.addColorStop(0.6, `rgba(26,106,90,${mu * 0.15})`);
@@ -346,22 +695,31 @@
         };
 
         draw();
-        return () => cancelAnimationFrame(raf);
-      }, [mu, fieldDensity, fieldVector, motionEnergy, constraintTension]);
+        return () => {
+          cancelAnimationFrame(raf);
+          window.removeEventListener("resize", resize);
+          canvas.removeEventListener("pointerdown", onDown);
+          canvas.removeEventListener("pointermove", onMove);
+          canvas.removeEventListener("pointerup", onUp);
+          canvas.removeEventListener("pointercancel", onUp);
+        };
+      }, []);
 
       return (
-        <canvas
-          ref={canvasRef}
-          width={360}
-          height={360}
-          style={{
-            width: "100%",
-            maxWidth: 360,
-            aspectRatio: "1/1",
-            borderRadius: 12,
-            border: `1px solid rgba(74,240,208,${0.1 + mu * 0.2})`,
-          }}
-        />
+        <div ref={wrapRef} style={{ width: "100%", maxWidth: 360, margin: "0 auto" }}>
+          <canvas
+            ref={canvasRef}
+            style={{
+              display: "block",
+              borderRadius: 12,
+              border: "1px solid rgba(74,240,208,0.15)",
+              cursor: "crosshair",
+            }}
+          />
+          <div style={{ textAlign: "center", fontSize: 8, color: "rgba(255,255,255,0.12)", marginTop: 4, letterSpacing: "0.1em" }}>
+            TOUCH THE FIELD — OBSERVATION PERTURBS μ
+          </div>
+        </div>
       );
     }
 
@@ -414,14 +772,36 @@
       return (
         <svg width={width} height={height} style={{ display: "block", opacity: 0.7 }}>
           <polyline fill="none" stroke={color} strokeWidth="1.2" points={points} />
-          {data.length > 0 && (
-            <circle
-              cx={width}
-              cy={height - ((data[data.length - 1].mu - min) / range) * (height - 4) - 2}
-              r="2.5"
-              fill={color}
-            />
-          )}
+          <circle
+            cx={width}
+            cy={height - ((data[data.length - 1].mu - min) / range) * (height - 4) - 2}
+            r="2.5"
+            fill={color}
+          />
+        </svg>
+      );
+    }
+
+    // ── Phase Portrait (μ × ρ trajectory) ──
+    function PhasePortrait({ data, width = 130, height = 90 }) {
+      if (!data || data.length < 2) return null;
+      const pts = data.slice(-90);
+      const points = pts
+        .map((d) => `${(d.fieldDensity * (width - 8) + 4).toFixed(1)},${(height - 4 - d.mu * (height - 8)).toFixed(1)}`)
+        .join(" ");
+      const head = pts[pts.length - 1];
+
+      return (
+        <svg width={width} height={height} style={{ display: "block" }}>
+          <rect x="0.5" y="0.5" width={width - 1} height={height - 1} rx="4" fill="rgba(255,255,255,0.015)" stroke="rgba(74,240,208,0.08)" strokeWidth="0.5" />
+          {[0.15, 0.35, 0.55, 0.75].map((m) => (
+            <line key={m} x1="2" x2={width - 2} y1={height - 4 - m * (height - 8)} y2={height - 4 - m * (height - 8)}
+              stroke="rgba(74,240,208,0.06)" strokeWidth="0.5" strokeDasharray="2,3" />
+          ))}
+          <polyline fill="none" stroke={GLOW_CYAN} strokeWidth="0.8" opacity="0.5" points={points} />
+          <circle cx={head.fieldDensity * (width - 8) + 4} cy={height - 4 - head.mu * (height - 8)} r="2.5" fill={PULSE_GOLD} />
+          <text x="4" y={height - 3} fill="rgba(255,255,255,0.15)" fontSize="6" fontFamily="monospace">ρ →</text>
+          <text x="3" y="8" fill="rgba(255,255,255,0.15)" fontSize="6" fontFamily="monospace">μ ↑</text>
         </svg>
       );
     }
@@ -436,7 +816,16 @@
       ];
 
       return (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {available.sim && (
+            <span style={{
+              fontSize: 9, padding: "2px 6px", borderRadius: 4,
+              background: "rgba(212,168,67,0.1)", color: PULSE_GOLD,
+              border: "1px solid rgba(212,168,67,0.25)", fontFamily: "monospace",
+            }}>
+              ◈ SIM
+            </span>
+          )}
           {sensors.map((s) => (
             <span
               key={s.key}
@@ -459,24 +848,7 @@
 
     // ── Field State Label ──
     function FieldStateLabel({ mu }) {
-      let label, desc;
-      if (mu < 0.15) {
-        label = "VOID";
-        desc = "Pure physical state — no connection to information";
-      } else if (mu < 0.35) {
-        label = "LATENT";
-        desc = "Latent mediation — field emergence";
-      } else if (mu < 0.55) {
-        label = "MEDIATING";
-        desc = "Mediation in progress — bidirectional constraint propagation";
-      } else if (mu < 0.75) {
-        label = "COHERENT";
-        desc = "Field order established — guidance without command";
-      } else {
-        label = "DISSOLVED";
-        desc = "Full mediation — info/physics distinction dissolved";
-      }
-
+      const label = phaseName(mu);
       return (
         <div style={{ textAlign: "center", padding: "8px 0" }}>
           <div style={{
@@ -489,7 +861,7 @@
           }}>
             {label}
           </div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", fontFamily: "sans-serif" }}>{desc}</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", fontFamily: "sans-serif" }}>{PHASE_DESC[label]}</div>
         </div>
       );
     }
@@ -551,11 +923,36 @@
       );
     }
 
+    // ── Small ghost button ──
+    function GhostButton({ onClick, children, active, warn, disabled }) {
+      const color = disabled ? "rgba(255,255,255,0.12)" : warn ? WARN_RED : active ? PULSE_GOLD : GLOW_CYAN;
+      return (
+        <button
+          onClick={disabled ? undefined : onClick}
+          style={{
+            background: active ? "rgba(212,168,67,0.08)" : "transparent",
+            border: `1px solid ${disabled ? "rgba(255,255,255,0.06)" : warn ? "rgba(196,74,58,0.4)" : active ? "rgba(212,168,67,0.4)" : GLOW_DIM}`,
+            color,
+            padding: "8px 14px",
+            borderRadius: 6,
+            fontFamily: "monospace",
+            fontSize: 10,
+            letterSpacing: "0.15em",
+            cursor: disabled ? "default" : "pointer",
+            transition: "all 0.3s ease",
+          }}
+        >
+          {children}
+        </button>
+      );
+    }
+
     // ── Tab Navigation ──
     function TabNav({ active, onChange }) {
       const tabs = [
         { id: "field", label: "Field", icon: "◎" },
         { id: "state", label: "State", icon: "≡" },
+        { id: "log", label: "Log", icon: "◍" },
       ];
 
       return (
@@ -591,10 +988,10 @@
     // ═══════════════════════════════════════
 
     function VoidMediator() {
-      const sensors = useSensors();
-      const phase = usePhaseGear(sensors);
-      const [tab, setTab] = useState("field");
       const [started, setStarted] = useState(false);
+      const [tab, setTab] = useState("field");
+      const engine = useVoidEngine(started);
+      const { ui, phaseRef, touchRef } = engine;
 
       const requestPermissions = useCallback(async () => {
         if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
@@ -603,8 +1000,9 @@
             await DeviceOrientationEvent.requestPermission();
           } catch (e) { /* denied */ }
         }
+        engine.enableMic(); // must run inside user gesture
         setStarted(true);
-      }, []);
+      }, [engine.enableMic]);
 
       // Splash / Permission screen
       if (!started) {
@@ -639,7 +1037,7 @@
                 VOID MEDIATOR
               </div>
               <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, letterSpacing: "0.2em", marginBottom: 32 }}>
-                v0.1 — PHASE-LAW ARCHITECTURE
+                v0.2 — PHASE-LAW ARCHITECTURE
               </div>
               <div style={{ color: "rgba(255,255,255,0.12)", fontSize: 10, lineHeight: 1.8, marginBottom: 32 }}>
                 Bridging the discontinuity<br />between information and physics
@@ -664,13 +1062,15 @@
               </button>
 
               <div style={{ color: "rgba(255,255,255,0.08)", fontSize: 8, marginTop: 16, lineHeight: 1.6 }}>
-                Requires sensor access<br />(accelerometer, orientation, audio)
+                Requires sensor access (accelerometer, orientation, audio)<br />
+                No sensors? SIM mode engages — the pointer becomes the field
               </div>
             </div>
           </div>
         );
       }
 
+      const phase = ui.phase;
       const uiOpacity = clamp(1.1 - phase.mu * 0.4, 0.3, 1);
 
       return (
@@ -686,45 +1086,69 @@
           opacity: uiOpacity,
         }}>
           {/* Header */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+            <div style={{ whiteSpace: "nowrap" }}>
               <span style={{ color: GLOW_CYAN, fontSize: 13, letterSpacing: "0.2em", fontWeight: 300 }}>VOID MEDIATOR</span>
-              <span style={{ color: "rgba(255,255,255,0.1)", fontSize: 9, marginLeft: 8 }}>v0.1</span>
+              <span style={{ color: "rgba(255,255,255,0.1)", fontSize: 9, marginLeft: 8 }}>v0.2</span>
             </div>
-            <StatusBadge available={sensors.available} />
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {ui.rec.on && (
+                <span style={{ color: WARN_RED, fontSize: 10, fontFamily: "monospace" }}>● REC</span>
+              )}
+              <button
+                onClick={engine.toggleSound}
+                title="μ drone"
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${ui.soundOn ? "rgba(212,168,67,0.4)" : "rgba(255,255,255,0.08)"}`,
+                  color: ui.soundOn ? PULSE_GOLD : "rgba(255,255,255,0.2)",
+                  borderRadius: 4,
+                  padding: "2px 8px",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  fontFamily: "monospace",
+                }}
+              >
+                ♪
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 4 }}>
+            <StatusBadge available={ui.available} />
           </div>
 
           <FieldStateLabel mu={phase.mu} />
           <TabNav active={tab} onChange={setTab} />
 
-          {/* Tab: Field */}
-          {tab === "field" && (
-            <div>
-              <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
-                <FieldCanvas
-                  mu={phase.mu}
-                  fieldDensity={phase.fieldDensity}
-                  fieldVector={phase.fieldVector}
-                  motionEnergy={phase.motionEnergy}
-                  constraintTension={phase.constraintTension}
-                />
-              </div>
+          {/* Tab: Field — canvas stays mounted, hidden when inactive */}
+          <div style={{ display: tab === "field" ? "block" : "none" }}>
+            <div style={{ marginBottom: 12 }}>
+              <FieldCanvas phaseRef={phaseRef} touchRef={touchRef} />
+            </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
-                <MuGauge mu={phase.mu} label="μ" />
-                <div style={{ flex: 1 }}>
-                  <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 8, marginBottom: 4, letterSpacing: "0.1em" }}>
-                    μ HISTORY (120 SAMPLES)
-                  </div>
-                  <Sparkline data={phase.history} width={200} height={50} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0" }}>
+              <MuGauge mu={phase.mu} label="μ" />
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 8, marginBottom: 4, letterSpacing: "0.1em" }}>
+                  μ HISTORY (180 SAMPLES)
                 </div>
-              </div>
-
-              <div style={{ marginTop: 8 }}>
-                <ConstraintFlow mu={phase.mu} tension={phase.constraintTension} fieldDensity={phase.fieldDensity} />
+                <Sparkline data={ui.history} width={200} height={50} />
               </div>
             </div>
-          )}
+
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginTop: 8 }}>
+              <div style={{ flex: 1 }}>
+                <ConstraintFlow mu={phase.mu} tension={phase.constraintTension} fieldDensity={phase.fieldDensity} />
+              </div>
+              <div>
+                <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 8, marginBottom: 4, letterSpacing: "0.1em", textAlign: "center" }}>
+                  PHASE PORTRAIT
+                </div>
+                <PhasePortrait data={ui.history} />
+              </div>
+            </div>
+          </div>
 
           {/* Tab: State */}
           {tab === "state" && (
@@ -743,14 +1167,15 @@
 
               <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: 12, marginBottom: 12 }}>
                 <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: "0.15em", marginBottom: 8 }}>
-                  RAW SENSOR DATA
+                  RAW SENSOR DATA {ui.available.sim && <span style={{ color: PULSE_GOLD }}>◈ SIMULATED</span>}
                 </div>
-                <MetricRow label="accel.x" value={sensors.accel.x} unit="m/s²" />
-                <MetricRow label="accel.y" value={sensors.accel.y} unit="m/s²" />
-                <MetricRow label="accel.z" value={sensors.accel.z} unit="m/s²" />
-                <MetricRow label="gyro.β" value={sensors.gyro.beta} unit="°" />
-                <MetricRow label="gyro.γ" value={sensors.gyro.gamma} unit="°" />
-                <MetricRow label="audio" value={sensors.audioLevel} />
+                <MetricRow label="accel.x" value={ui.sensors.accel.x} unit="m/s²" />
+                <MetricRow label="accel.y" value={ui.sensors.accel.y} unit="m/s²" />
+                <MetricRow label="accel.z" value={ui.sensors.accel.z} unit="m/s²" />
+                <MetricRow label="gyro.β" value={ui.sensors.gyro.beta} unit="°" />
+                <MetricRow label="gyro.γ" value={ui.sensors.gyro.gamma} unit="°" />
+                <MetricRow label="audio" value={ui.sensors.audioLevel} />
+                <MetricRow label="light" value={ui.sensors.light} unit={ui.available.light ? "lx~" : "sim"} />
               </div>
 
               <div style={{
@@ -766,7 +1191,72 @@
                 <div style={{ color: GLOW_DIM, fontSize: 11 }}>
                   dμ/dt = α(μ_env − μ) + β·∇ρ(x)
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.1)", fontSize: 8, marginTop: 4 }}>α=0.08 β=0.04</div>
+                <div style={{ color: "rgba(255,255,255,0.1)", fontSize: 8, marginTop: 4 }}>α=0.08 β=0.04 + touch coupling</div>
+              </div>
+            </div>
+          )}
+
+          {/* Tab: Log */}
+          {tab === "log" && (
+            <div>
+              {/* Recorder */}
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: "0.15em" }}>FIELD LOG — CSV RECORDER</span>
+                  <span style={{ color: ui.rec.on ? WARN_RED : "rgba(255,255,255,0.2)", fontSize: 10 }}>
+                    {ui.rec.on ? `● ${Math.floor(ui.rec.elapsed / 1000)}s` : "○ idle"}
+                  </span>
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 10 }}>
+                  {ui.rec.rows} samples ({(ui.rec.rows * TICK_MS / 1000).toFixed(0)}s of field time)
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {!ui.rec.on
+                    ? <GhostButton onClick={engine.rec.start}>▶ RECORD</GhostButton>
+                    : <GhostButton onClick={engine.rec.stop} warn>■ STOP</GhostButton>}
+                  <GhostButton onClick={engine.rec.download} disabled={ui.rec.rows === 0}>↓ CSV</GhostButton>
+                  <GhostButton onClick={engine.rec.clear} disabled={ui.rec.rows === 0 || ui.rec.on}>✕ CLEAR</GhostButton>
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.1)", fontSize: 8, marginTop: 8, lineHeight: 1.6 }}>
+                  Compatible with field-analysis.html — drop the CSV there to analyze your walk.
+                </div>
+              </div>
+
+              {/* Phase transitions */}
+              <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: "0.15em" }}>PHASE TRANSITIONS</span>
+                  {ui.transitions.length > 0 && (
+                    <button
+                      onClick={engine.clearTransitions}
+                      style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.15)", fontSize: 9, cursor: "pointer", fontFamily: "monospace" }}
+                    >
+                      clear
+                    </button>
+                  )}
+                </div>
+                {ui.transitions.length === 0 ? (
+                  <div style={{ color: "rgba(255,255,255,0.12)", fontSize: 10, padding: "8px 0" }}>
+                    No transitions yet — move, speak, or touch the field.
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                    {ui.transitions.slice().reverse().slice(0, 40).map((tr, i) => (
+                      <div key={`${tr.t}-${i}`} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.03)", fontSize: 10 }}>
+                        <span style={{ color: "rgba(255,255,255,0.2)" }}>{hms(tr.t)}</span>
+                        <span>
+                          <span style={{ color: GLOW_DIM }}>{tr.from}</span>
+                          <span style={{ color: "rgba(255,255,255,0.2)", margin: "0 4px" }}>→</span>
+                          <span style={{ color: tr.to === "DISSOLVED" ? PULSE_GOLD : GLOW_CYAN }}>{tr.to}</span>
+                        </span>
+                        <span style={{ color: "rgba(255,255,255,0.25)" }}>μ={tr.mu.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ color: "rgba(255,255,255,0.08)", fontSize: 8, marginTop: 8 }}>
+                  Persisted locally. Haptic pulse on each transition (supported devices).
+                </div>
               </div>
             </div>
           )}

@@ -1,7 +1,7 @@
 # Void Mediator — Phase-Law Architecture
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1-cyan?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.2-cyan?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/pTCP-Phase--Law_Architecture-1a6a5a?style=flat-square" alt="pTCP">
 </p>
 
@@ -30,6 +30,17 @@
 | ジャイロスコープ | ✓ | ✓ | ✗ |
 | マイク | ✓ (許可必要) | ✓ (許可必要) | ✓ |
 | 位置情報 | ✓ (許可必要) | ✓ (許可必要) | ✓ |
+
+## ✨ v0.2 の進化点
+
+- **FIELD LOG（CSVレコーダー）**: Logタブから記録開始→CSVダウンロード。`field-analysis.html` にそのまま読み込める形式（wifi列は0固定）
+- **タッチ摂動**: 場に触れると粒子が反応し、μが応答する（観測による場の擾乱）。触れている間はμが上昇し、離すと減衰
+- **フェーズ遷移ログ**: VOID→LATENT等の遷移を記録・localStorage永続化。遷移時にハプティクス振動（対応端末）
+- **フェーズポートレート**: μ×ρ軌跡の小窓表示
+- **μドローン**: μに追従する低音（ヘッダの♪でON/OFF、既定OFF）
+- **SIMモード**: モーションセンサー非搭載環境（デスクトップ）ではポインタが場を駆動
+- **性能改修**: 描画ループの毎tick再生成を解消、devicePixelRatio対応で高精細化、粒子リンクを空間グリッド化（O(n²)→O(n)）
+- **マイク初期化をACTIVATE後（ユーザージェスチャー内）に移動**、AmbientLightSensor対応（利用可能な場合は実照度）
 
 ## 🔬 Concept
 
